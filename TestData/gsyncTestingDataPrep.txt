@@ -1,0 +1,23 @@
+# Execute the following to set up the GSync test dir and bucket before running the JUnit testing
+
+cd /Users/u0028003/Code/AwsApps/TestData
+
+rm -rf GSync __MACOSX/
+unzip GSync.zip
+
+# Set timestamps to 2018
+find GSync -print | while read filename; do
+   echo $filename
+   touch -t 201801010101.01 $filename
+done
+# Set timestamp to now
+touch GSync/NoUpload/testTooRecent.bed.gz
+# Create a sym link
+ln -s GSync/Bam/testWithIndex.bam GSync/NoUpload/testSymLink.bam 
+
+# Create a test bucket or delete all of the objects in the existing test bucket
+# If needed install AWS CLI, https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html 
+aws s3 rm s3://hcibioinfo-gsync-clingen1-repo-test --recursive
+
+# Run GSync, verbose and debug
+## dry run:  -d ~/Code/AwsApps/TestData/GSync -b hcibioinfo-gsync-clingen1-repo-test -g 0.0005 -v -x

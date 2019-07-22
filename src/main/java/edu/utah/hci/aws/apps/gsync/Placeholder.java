@@ -1,0 +1,112 @@
+package edu.utah.hci.aws.apps.gsync;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.HashMap;
+import edu.utah.hci.aws.util.Util;
+
+/**Container for placeholder attributes, these may evolve over time so keep generic. File format is key = value, no whitespace or = signs in key or value.
+ * At minimum include:
+ * 	bucket - aws bucket name 
+ * 	key - aws key, should be the canonical path at the time of upload, this should be the same as the current file canonical path unless it has been moved
+ * 	size - file size in bytes
+ */
+public class Placeholder {
+	
+	
+	//fields
+	private HashMap<String, String> attributes = new HashMap<String, String>();
+	private File placeHolderFile;
+	private boolean keyMatchesLocalPlaceholderPath = false;
+	private boolean foundInS3 = false;
+	private boolean s3SizeMatches = false;
+	private boolean s3EtagMatches = false;
+	private static final String[] requiredKeys = {"bucket", "key", "size", "etag"};
+	
+	public Placeholder() {};
+	
+	public Placeholder(File f) throws IOException {
+		attributes = Util.parseKeyValues(f);
+		placeHolderFile = f;
+		checkKeyMatchesPath();
+	}
+	
+	public void writePlaceholder(File f) {
+		PrintWriter out = null;
+		try {
+			//check that bucket, key, and size are in attributes
+			for (String k: requiredKeys) {
+				if (attributes.containsKey(k) == false)throw new IOException("Missing required attribute "+k+" in "+attributes);
+			}
+			//write it
+			out = new PrintWriter( new FileWriter(f));
+			for (String key: attributes.keySet()) out.println(key+" = "+attributes.get(key));
+			placeHolderFile = f;
+		} catch (IOException e) {
+			f.delete();
+			System.err.println("\nFailed to write placeholder file for "+f);
+			e.printStackTrace();
+			System.exit(0);
+		}
+		finally {
+			if (out!= null) out.close();
+		}
+	}
+	
+	public void checkKeyMatchesPath() throws IOException {
+		String key = attributes.get("key");
+		if (key == null) throw new IOException("Failed to find the 'key' attribute in "+placeHolderFile);
+		String cp = placeHolderFile.getCanonicalPath();
+		String trimmedPlaceHolder = cp.substring(1, cp.length() - GSync.PLACEHOLDER_EXTENSION.length());
+		keyMatchesLocalPlaceholderPath = trimmedPlaceHolder.equals(key);
+	}
+
+	public HashMap<String, String> getAttributes() {
+		return attributes;
+	}
+	public void setAttributes(HashMap<String, String> attributes) {
+		this.attributes = attributes;
+	}
+	public File getPlaceHolderFile() {
+		return placeHolderFile;
+	}
+	public void setPlaceHolderFile(File placeHolderFile) {
+		this.placeHolderFile = placeHolderFile;
+	}
+	public void putAttribute(String key, String value) {
+		attributes.put(key, value);
+	}
+	public String getAttribute(String key) {
+		return attributes.get(key);
+	}
+
+	public boolean isFoundInS3() {
+		return foundInS3;
+	}
+
+	public void setFoundInS3(boolean foundInS3) {
+		this.foundInS3 = foundInS3;
+	}
+
+	public boolean isS3SizeMatches() {
+		return s3SizeMatches;
+	}
+
+	public void setS3SizeMatches(boolean s3SizeMatches) {
+		this.s3SizeMatches = s3SizeMatches;
+	}
+
+	public boolean isKeyMatchesLocalPlaceholderPath() {
+		return keyMatchesLocalPlaceholderPath;
+	}
+
+	public boolean isS3EtagMatches() {
+		return s3EtagMatches;
+	}
+
+	public void setS3EtagMatches(boolean s3EtagMatches) {
+		this.s3EtagMatches = s3EtagMatches;
+	}
+}
