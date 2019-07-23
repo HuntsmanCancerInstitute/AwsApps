@@ -85,6 +85,9 @@ public class TestGSync {
 				String testKey = path + s;
 				assertTrue(pathFile.containsKey(testKey));
 			}
+			
+			//check zero placeholders
+			assertTrue(gs.getPlaceholderFiles().size() == 0);
 
 		} catch (IOException | InterruptedException e) {
 			e.printStackTrace();
@@ -122,7 +125,7 @@ public class TestGSync {
 			for (String s: filesForUpload) assertTrue(new File (pathToTestData + s).exists());
 			
 			//check that placeholders have been created
-			for (String s: filesForUpload) assertTrue(new File (pathToTestData + s + GSync.PLACEHOLDER_EXTENSION).exists());
+			for (String s: filesForUpload) assertTrue(new File (pathToTestData + s + Placeholder.PLACEHOLDER_EXTENSION).exists());
 			
 			//check that the S3 objects exist
 			HashMap<String, S3ObjectSummary> kos = fetchS3Objects();
@@ -179,7 +182,7 @@ public class TestGSync {
 			for (String s: filesForUpload) assertFalse(new File (pathToTestData + s).exists());
 			
 			//check that placeholders have been created
-			for (String s: filesForUpload) assertTrue(new File (pathToTestData + s + GSync.PLACEHOLDER_EXTENSION).exists());
+			for (String s: filesForUpload) assertTrue(new File (pathToTestData + s + Placeholder.PLACEHOLDER_EXTENSION).exists());
 			
 			//check that the non uploaded files are present
 			for (String s: filesNotForUpload) assertTrue(new File (pathToTestData + s).exists());
@@ -223,7 +226,7 @@ public class TestGSync {
 				uploadKeySize.put(n.substring(1), size);
 			}
 
-			//run uploads and delete local
+			//run uploads and delete local files
 			GSync gs = new GSync();
 			gs.setLocalDir(new File(pathToTestData+"/GSync"));
 			gs.setMinGigaBytes(0.0005);
@@ -233,32 +236,51 @@ public class TestGSync {
 			gs.doWork();
 			assertTrue(gs.isResultsCheckOK());
 			
+			//move a placeholder
+			File pFile3 = new File(pathToTestData+filesForUpload[4]+Placeholder.PLACEHOLDER_EXTENSION);
+			File destination = new File(pathToTestData+"GSync/Zip/"+pFile3.getName());
+			pFile3.renameTo(destination);
+			
+			//run a second time, this will stop work after finding the bad placeholder
+			GSync gsp = new GSync();
+			gsp.setLocalDir(new File(pathToTestData+"/GSync"));
+			gsp.setMinGigaBytes(0.0005);
+			gsp.setBucketName(testS3BucketName);
+			gsp.setDryRun(false);
+			gsp.setDeleteUploaded(true);
+			gsp.doWork();
+			
+			//check that there are problems
+			assertFalse(gsp.isResultsCheckOK());
+			
+			//check for moved placeholder
+			Placeholder badP = gsp.getFailingPlaceholders().get(0);
+			assertTrue(badP.getPlaceHolderFile().toString().equals(destination.toString()));
+			
+			//fix the misplaced placeholder
+			destination.renameTo(pFile3);
+			
 			//delete an S3 object
 			deleteS3Object(pathToTestData.substring(1)+filesForUpload[0]);
 			
 			//delete a local placeholder file
-			File p = new File(pathToTestData+filesForUpload[2]+GSync.PLACEHOLDER_EXTENSION);
+			File p = new File(pathToTestData+filesForUpload[2]+Placeholder.PLACEHOLDER_EXTENSION);
 			p.delete();
 			
 			//change the size in a placeholder
-			File pFile = new File(pathToTestData+filesForUpload[1]+GSync.PLACEHOLDER_EXTENSION);
+			File pFile = new File(pathToTestData+filesForUpload[1]+ Placeholder.PLACEHOLDER_EXTENSION);
 			Placeholder ph = new Placeholder(pFile);
 			ph.getAttributes().put("size", "111");
 			ph.writePlaceholder(pFile);
 			
 			//change the etag in a placeholder
-			File pFile2 = new File(pathToTestData+filesForUpload[3]+GSync.PLACEHOLDER_EXTENSION);
+			File pFile2 = new File(pathToTestData+filesForUpload[3]+ Placeholder.PLACEHOLDER_EXTENSION);
 			Placeholder ph2 = new Placeholder(pFile2);
 			ph2.getAttributes().put("etag", "badEtag");
 			ph2.writePlaceholder(pFile2);
 			
-			//move a placeholder
-			File pFile3 = new File(pathToTestData+filesForUpload[4]+GSync.PLACEHOLDER_EXTENSION);
-			File destination = new File(pathToTestData+"GSync/Zip/"+pFile3.getName());
-			pFile3.renameTo(destination);
 			
-		
-			//run a second time, lots of issues should occur
+			//run a third time, this will throw lots of errors
 			GSync gs2 = new GSync();
 			gs2.setLocalDir(new File(pathToTestData+"/GSync"));
 			gs2.setMinGigaBytes(0.0005);
@@ -266,29 +288,24 @@ public class TestGSync {
 			gs2.setDryRun(false);
 			gs2.setDeleteUploaded(true);
 			gs2.doWork();
-			
+		
 			//check that there are problems
-			assertFalse(gs2.isResultsCheckOK());
+			assertFalse(gsp.isResultsCheckOK());
 			
 			//check that the missing S3 object is recorded
-			Placeholder notInS3 = gs2.getNotFoundInS3().get(0);
+			Placeholder notInS3 = gs2.getFailingPlaceholders().get(0);
 			assertTrue(notInS3.getAttribute("key").equals(pathToTestData.substring(1)+filesForUpload[0]));
 			
 			//check for an S3 object with no local placeholder or file
 			assertTrue(gs2.getS3KeyWithNoLocal().contains(pathToTestData.substring(1)+filesForUpload[2]));
-		
+			
 			//check for incorrect size in placeholder
-			Placeholder size = gs2.getS3SizeNotMatchPlaceholder().get(0);
+			Placeholder size = gs2.getFailingPlaceholders().get(1);
 			assertTrue(size.getAttribute("key").equals(pathToTestData.substring(1)+filesForUpload[1]));
 			
 			//check for incorrect etag in placeholder
-			Placeholder etag = gs2.getS3EtagNotMatchPlaceholder().get(0);
+			Placeholder etag = gs2.getFailingPlaceholders().get(2);
 			assertTrue(etag.getAttribute("key").equals(pathToTestData.substring(1)+filesForUpload[3]));
-			
-			//check for moved placeholder
-			Placeholder moved = gs2.getKeyDoesNotMatchLocalPlaceholderPath().get(0);
-			assertTrue(moved.getAttribute("key").equals(pathToTestData.substring(1)+filesForUpload[4]));
-
 
 		} catch (Exception e) {
 			System.err.println(e.getMessage());

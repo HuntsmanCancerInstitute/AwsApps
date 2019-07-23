@@ -46,10 +46,12 @@ public class GSync {
 	private boolean deleteUploaded = false;
 
 	//internal fields
-	public static final String PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt"; //don't change this
-	private HashMap<String, File> candidatesForUpload = null;
+	private HashMap<String, File> candidatesForUpload = new HashMap<String, File>();
+	
 	private ArrayList<File> placeholderFiles = new ArrayList<File>();
+	private ArrayList<Placeholder> failingPlaceholders = new ArrayList<Placeholder>();
 	private HashMap<String, Placeholder> placeholders = null;
+	
 	private String region = null;
 	private boolean resultsCheckOK = true;
 
@@ -57,15 +59,8 @@ public class GSync {
 	private ArrayList<File> localFileAlreadyUploadedButDiffSize = new ArrayList<File>();
 	private ArrayList<File> localFileAlreadyUploadedNoPlaceholder = new ArrayList<File>();
 	private ArrayList<String> s3KeyWithNoLocal = new ArrayList<String>();
-	private ArrayList<Placeholder> keyDoesNotMatchLocalPlaceholderPath = new ArrayList<Placeholder>();
-	private ArrayList<Placeholder> notFoundInS3 = new ArrayList<Placeholder>();
-	private ArrayList<Placeholder> s3SizeNotMatchPlaceholder = new ArrayList<Placeholder>();
-	private ArrayList<Placeholder> s3EtagNotMatchPlaceholder = new ArrayList<Placeholder>();
-	private ArrayList<Placeholder> okPlaceholders = new ArrayList<Placeholder>();
-	private AmazonS3 s3 = null;
-	
-	
 
+	private AmazonS3 s3 = null;
 
 	public GSync (String[] args){
 		try {
@@ -79,7 +74,8 @@ public class GSync {
 			p("\nDone! "+Math.round(diffTime)+" minutes\n");
 
 		} catch (Exception e) {
-			e.printStackTrace();
+			if (verbose) e.printStackTrace();
+			else p(e.getMessage());
 			System.exit(1);
 		} finally {
 			
@@ -92,8 +88,12 @@ public class GSync {
 		scanLocalDir();
 
 		parsePlaceholderFiles();
+		if (resultsCheckOK == false) return;
 
 		scanBucket();
+		
+		checkPlaceholders();
+		if (resultsCheckOK == false) return;
 		
 		removeLocalFromCandidates();
 		
@@ -162,7 +162,7 @@ public class GSync {
 	}
 
 	private void writePlaceholder(File f, String etag) throws IOException {
-		File p = new File(f.getCanonicalPath()+PLACEHOLDER_EXTENSION);
+		File p = new File(f.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
 		String[] attributes = new String[] {"bucket = "+bucketName, "key = "+ f.getCanonicalPath().substring(1), "etag = "+etag, "size = "+f.length()};
 		Util.write(attributes, p);
 	}
@@ -241,9 +241,6 @@ public class GSync {
 		}
 		else if (verbose) p("\nNo local files were found that differed in size or etag with their S3 counterpart.");
 		
-		//placeholder files
-		printPlaceholderResults();
-		
 		//s3 keys
 		if (s3KeyWithNoLocal.size() != 0) {
 			p("\nThe following are s3 objects with no local placeholder file. Was it deleted? Consider deleting the S3 Object?");
@@ -270,68 +267,59 @@ public class GSync {
 		
 	}
 	
-	private void printPlaceholderResults() throws IOException {
 
+
+
+	private void checkPlaceholders() throws IOException {
+		p("\nChecking placeholder files...");
 		for (Placeholder p: placeholders.values()) {
-			boolean pathMatches = true;
-			if (p.isKeyMatchesLocalPlaceholderPath() == false) {
-				keyDoesNotMatchLocalPlaceholderPath.add(p);
-				pathMatches = false;
+			boolean ok = true;
+			//found in S3
+			if (p.isFoundInS3() == false) {
+				ok = false;
+				p.addErrorMessage("Failed to find the associated S3 Object.");
 			}
-			
-			if (p.isFoundInS3() == false) notFoundInS3.add(p);
 			else {
 				//for those with match in S3
-				if (p.isS3SizeMatches() == false) s3SizeNotMatchPlaceholder.add(p);
-				else if (p.isS3EtagMatches() == false) s3EtagNotMatchPlaceholder.add(p);
-				else if (pathMatches) okPlaceholders.add(p);
+				if (p.isS3SizeMatches() == false) {
+					ok = false;
+					p.addErrorMessage("S3 object size doesn't match the size in this placeholder file.");
+				}
+				if (p.isS3EtagMatches() == false) {
+					ok = false;
+					p.addErrorMessage("S3 object etag doesn't match the etag in this placeholder file.");
+				}
+				//restore?
+				if (p.getType().equals(Placeholder.TYPE_RESTORE)) {
+					//does the restored file already exist?
+					File local = new File("/"+p.getAttribute("key"));
+					if (local.exists()) {
+						ok = false;
+						p.addErrorMessage("The local file already exists. Suspect a failed download.");
+					}
+				}
 			}
+			//save it
+			if (ok) placeholders.put(p.getAttribute("key"), p);
+			else failingPlaceholders.add(p);
 		}
 		
-		if (okPlaceholders.size() != placeholders.size()) {
-			p("\nProblematic placeholder files:");
-			
-			//keyDoesNotMatchLocalPlaceholderPath
-			if (keyDoesNotMatchLocalPlaceholderPath.size() != 0) {
-				p("\tThe key in the local placeholder file does not match its current location. Recommend moving the S3 object to match the current path and updating the local placeholder file.");
-				for (Placeholder p : keyDoesNotMatchLocalPlaceholderPath) p("\t\t"+p.getPlaceHolderFile().getCanonicalPath());
-			}
-			else if (verbose) p("\tNo placeholders were found where the key doesn't match the current location.");
-			
-			//notFoundInS3
-			if (notFoundInS3.size() != 0) {
-				p("\tMajor problem, the following placeholder keys were not found in S3?! Different bucket?");
-				for (Placeholder p : notFoundInS3) p("\t\t"+p.getPlaceHolderFile().getCanonicalPath()+"\t"+p.getAttribute("bucket")+"\t"+p.getAttribute("key"));
-			}
-			else if (verbose) p("\tNo placeholder keys were missing S3 objects.");
-			
-			//s3SizeNotMatchPlaceholder
-			if (s3SizeNotMatchPlaceholder.size() != 0) {
-				p("\tMajor problem, the following placeholders had sizes that did not match their S3 objects?!");
-				for (Placeholder p : s3SizeNotMatchPlaceholder) p("\t\t"+p.getPlaceHolderFile().getCanonicalPath()+"\t"+p.getAttribute("bucket")+"\t"+p.getAttribute("key"));
-			}
-			else if (verbose) p("\tAll placeholder sizes match their S3 objects");
-			
-			//s3EtagNotMatchPlaceholder
-			if (s3EtagNotMatchPlaceholder.size() != 0) {
-				p("\tMajor problem, the following placeholders had etags that did not match their S3 objects?!");
-				for (Placeholder p : s3EtagNotMatchPlaceholder) p("\t\t"+p.getPlaceHolderFile().getCanonicalPath()+"\t"+p.getAttribute("bucket")+"\t"+p.getAttribute("key"));
-			}
-			else if (verbose) p("\tAll placeholder etags match their S3 objects");
-			
+		
+		//any failing paths?
+		if (failingPlaceholders.size() !=0) {
+			p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
+			for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
+			resultsCheckOK = false;
 		}
 		else if (verbose) {
 			p("\nNo problematic placeholder files were found.");
 			if (debug) {
-				if (okPlaceholders.size() != 0) {
+				if (placeholders.size() != 0) {
 					p("\tList of correct files:");
-					for (Placeholder p : okPlaceholders) p("\t"+p.getPlaceHolderFile().getCanonicalPath());
+					for (Placeholder p : placeholders.values()) p("\t"+p.getPlaceHolderFile().getCanonicalPath());
 				}
 			}
 		}
-		
-		int numBad = keyDoesNotMatchLocalPlaceholderPath.size()+ notFoundInS3.size()+ s3SizeNotMatchPlaceholder.size() + s3EtagNotMatchPlaceholder.size();
-		if (numBad != 0) resultsCheckOK = false;
 	}
 
 	private static void p(String s) {
@@ -354,7 +342,6 @@ public class GSync {
         	String key = os.getKey();
             if (debug) p("\t" + key+"\t"+os.getSize()+"\t"+os.getStorageClass());
 
-        	
         	//check candidatesForUpload
         	if (candidatesForUpload.containsKey(key)) {
         		//OK, a local fat old file with the same name has already been uploaded to S3
@@ -385,45 +372,61 @@ public class GSync {
         		//OK, this is an unknown s3 object with no local reference
         		s3KeyWithNoLocal.add(key);
         	}
-        };
+        }
 	}
 
+	/**Check the placeholders for issues.*/
 	private void parsePlaceholderFiles() throws IOException {
 		p("\nParsing local placeholder files...");
 		placeholders = new HashMap<String, Placeholder>();
-
 		for (File f: placeholderFiles) {
 			Placeholder p = new Placeholder(f);
-			placeholders.put(p.getAttribute("key"), p);
+			String key = p.getAttribute("key");
+			
+			//does the path match the key?
+			if (p.isKeyMatchesLocalPlaceholderPath()) {
+				
+				//duplicate placeholders?
+				if (placeholders.containsKey(key)) {
+					p.addErrorMessage("Multiple placeholder files found with the same key. Can only have one std, restore, or delete placeholder at a time." );
+					failingPlaceholders.add(p);
+				}
+				else placeholders.put(key, p);
+				
+			}
+			else {
+				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so move the S3 object to match and update the key attribute in this placeholder file" );
+				failingPlaceholders.add(p);
+			}
 		}
-
-		p("\t"+placeholders.size()+" placeholder files");
+		//any failing paths?
+		if (failingPlaceholders.size() !=0) {
+			p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
+			for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
+			resultsCheckOK = false;
+		}
+		else p("\t"+placeholders.size()+" placeholder files");
 	}
-
-
 
 	void scanLocalDir() throws IOException {
 		p("\nScanning local directory for candidate files to upload...");
 
-		candidatesForUpload = scanDirectory(localDir, fileExtensions);
+		scanDirectory(localDir, fileExtensions);
 
-		p("\t"+candidatesForUpload.size()+" candidate files");
+		p("\t"+candidatesForUpload.size()+" candidate upload files");
+		
 
 	}
 
 
 
 
-	/*Fetches all files with a given extension, min size, min age, not symbolic links. Also save any that are aws upload placeholder files.
+	/**Fetches all files with a given extension, min size, min age, not symbolic links. Also save any that are aws uploaded placeholder files and restore placeholder files.
 	 * Includes indexes for bam, cram, and tabix gz if present*/
-	private HashMap<String, File> scanDirectory (File directory, String[] fileExtensions) throws IOException{
-		HashMap<String, File> files = new HashMap<String, File>(); 
+	private void scanDirectory (File directory, String[] fileExtensions) throws IOException{ 
 		File[] list = directory.listFiles();
 		for (int i=0; i< list.length; i++){
-			if (list[i].isDirectory()) {
-				HashMap<String, File> al = scanDirectory (list[i], fileExtensions);
-				files.putAll(al);
-			}
+			if (list[i].isDirectory()) scanDirectory (list[i], fileExtensions);
 			else {
 				//matching extension?
 				String fileName = list[i].getName();
@@ -434,12 +437,13 @@ public class GSync {
 						break;
 					}
 				}
+				//symlink?
+				boolean symlink = Files.isSymbolicLink(list[i].toPath());	
+						
 				if (match) {
 					if (debug) p("  Checking "+list[i].getCanonicalPath());
-					//Is it a sym link?
-					Path p = list[i].toPath();
-					if (Files.isSymbolicLink(p)) {
-						if (debug) p("   is a symlink");
+					if (symlink) {
+						if (debug)p("   is a symlink");
 					}
 					else {
 						//size?
@@ -449,33 +453,29 @@ public class GSync {
 							//age in days?
 							int age = Util.ageOfFileInDays(list[i]);
 							if (age >= minDaysOld) {
-								files.put(list[i].getCanonicalPath().substring(1), list[i].getCanonicalFile());
+								candidatesForUpload.put(list[i].getCanonicalPath().substring(1), list[i].getCanonicalFile());
 								if (debug) p("   Adding "+list[i].getCanonicalPath());
+								
 								//look for index file
 								File index = findIndex(list[i]);
 								if (index != null) {
-									files.put(index.getCanonicalPath().substring(1), index.getCanonicalFile());
+									candidatesForUpload.put(index.getCanonicalPath().substring(1), index.getCanonicalFile());
 									if (debug) p("   Adding "+ index.getCanonicalPath());
 								}
 								else if (debug) p("   No index file for "+list[i]);
 							}
 							else if (debug) p("   Too recent "+age+" days");
-
 						}
 						else if (debug) p("   Too small "+Util.formatNumber(size, 3)+" gb");
 					}
 
 				}
-				else if (fileName.endsWith(PLACEHOLDER_EXTENSION)) {
-					//Is it a sym link?
-					if (Files.isSymbolicLink(list[i].toPath()) == false) {
-						placeholderFiles.add(list[i].getCanonicalFile());
-						if (debug) p("  Placeholder "+ list[i].getCanonicalPath());
-					}
+				else if (fileName.contains(Placeholder.PLACEHOLDER_EXTENSION) && symlink == false) {
+					placeholderFiles.add(list[i].getCanonicalFile());
+					if (debug) p("  Placeholder "+ list[i].getCanonicalPath());
 				}
 			}
 		}
-		return files;
 	}
 
 
@@ -671,28 +671,7 @@ public class GSync {
 		this.debug = debug;
 	}
 
-
-	public ArrayList<Placeholder> getKeyDoesNotMatchLocalPlaceholderPath() {
-		return keyDoesNotMatchLocalPlaceholderPath;
-	}
-
-
-	public ArrayList<Placeholder> getNotFoundInS3() {
-		return notFoundInS3;
-	}
-
-
-	public ArrayList<Placeholder> getS3SizeNotMatchPlaceholder() {
-		return s3SizeNotMatchPlaceholder;
-	}
-
-
-	public ArrayList<Placeholder> getOkPlaceholders() {
-		return okPlaceholders;
-	}
-
-
-	public ArrayList<Placeholder> getS3EtagNotMatchPlaceholder() {
-		return s3EtagNotMatchPlaceholder;
+	public ArrayList<Placeholder> getFailingPlaceholders() {
+		return failingPlaceholders;
 	}
 }

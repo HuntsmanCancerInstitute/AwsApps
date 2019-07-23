@@ -4,7 +4,10 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.regex.Pattern;
+
 import edu.utah.hci.aws.util.Util;
 
 /**Container for placeholder attributes, these may evolve over time so keep generic. File format is key = value, no whitespace or = signs in key or value.
@@ -18,18 +21,34 @@ public class Placeholder {
 	
 	//fields
 	private HashMap<String, String> attributes = new HashMap<String, String>();
-	private File placeHolderFile;
+	private File placeHolderFile = null;
+	private File localFile = null;
 	private boolean keyMatchesLocalPlaceholderPath = false;
 	private boolean foundInS3 = false;
 	private boolean s3SizeMatches = false;
 	private boolean s3EtagMatches = false;
-	private static final String[] requiredKeys = {"bucket", "key", "size", "etag"};
+	public static final String[] requiredKeys = {"bucket", "key", "size", "etag"};
+	public static final String PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt"; //don't change this
+	public static final String RESTORE_PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt.restore"; //don't change this
+	public static final String DELETE_PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt.delete"; //don't change this
+	public static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\.ArchiveInfo\\.txt.*");
+	private ArrayList<String> errorMessages = null;
+	
+	/**Null for unset,  STANDARD, RESTORE, DELETE.*/
+	private String type = null;
+	public static final String TYPE_STANDARD = "STANDARD";
+	public static final String TYPE_RESTORE = "RESTORE";
+	public static final String TYPE_DELETE = "DELETE";
 	
 	public Placeholder() {};
 	
 	public Placeholder(File f) throws IOException {
 		attributes = Util.parseKeyValues(f);
 		placeHolderFile = f;
+		//set type
+		if (f.getName().endsWith(PLACEHOLDER_EXTENSION)) type = TYPE_STANDARD;
+		else if (f.getName().endsWith(RESTORE_PLACEHOLDER_EXTENSION)) type = TYPE_RESTORE;
+		else if (f.getName().endsWith(DELETE_PLACEHOLDER_EXTENSION)) type = TYPE_DELETE;
 		checkKeyMatchesPath();
 	}
 	
@@ -55,12 +74,32 @@ public class Placeholder {
 		}
 	}
 	
+	public String getMinimalInfo() throws IOException {
+		StringBuilder sb = new StringBuilder();
+		sb.append("\tlocalPlaceholderFile = "+placeHolderFile+"\n");
+		sb.append("\ttype = "+type);
+		for (String key : attributes.keySet()) {
+			sb.append("\n\t");
+			sb.append(key);
+			sb.append(" = ");
+			sb.append(attributes.get(key));
+		}
+		for (String m: errorMessages) {
+			sb.append("\n\t");
+			sb.append("error = ");
+			sb.append(m);
+		}
+		sb.append("\n");
+		
+		return sb.toString();
+	}
+	
 	public void checkKeyMatchesPath() throws IOException {
 		String key = attributes.get("key");
 		if (key == null) throw new IOException("Failed to find the 'key' attribute in "+placeHolderFile);
 		String cp = placeHolderFile.getCanonicalPath();
-		String trimmedPlaceHolder = cp.substring(1, cp.length() - GSync.PLACEHOLDER_EXTENSION.length());
-		keyMatchesLocalPlaceholderPath = trimmedPlaceHolder.equals(key);
+		String tp = PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("").substring(1);
+		keyMatchesLocalPlaceholderPath = tp.equals(key);
 	}
 
 	public HashMap<String, String> getAttributes() {
@@ -108,5 +147,26 @@ public class Placeholder {
 
 	public void setS3EtagMatches(boolean s3EtagMatches) {
 		this.s3EtagMatches = s3EtagMatches;
+	}
+
+	public File getLocalFile() {
+		return localFile;
+	}
+
+	public void setLocalFile(File localFile) {
+		this.localFile = localFile;
+	}
+
+	public String getType() {
+		return type;
+	}
+
+	public ArrayList<String> getErrorMessages() {
+		return errorMessages;
+	}
+
+	public void addErrorMessage(String message) {
+		if (errorMessages == null) errorMessages = new ArrayList<String>();
+		errorMessages.add(message);
 	}
 }
