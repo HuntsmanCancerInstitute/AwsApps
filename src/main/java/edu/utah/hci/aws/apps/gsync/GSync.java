@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,6 +49,7 @@ public class GSync {
 	private boolean verbose = false;
 	private boolean debug = false;
 	private boolean deleteUploaded = false;
+	private boolean updateS3Keys = false;
 
 	//internal fields
 	private HashMap<String, File> candidatesForUpload = new HashMap<String, File>();
@@ -55,6 +57,7 @@ public class GSync {
 	private ArrayList<File> placeholderFiles = new ArrayList<File>();
 	private ArrayList<Placeholder> failingPlaceholders = new ArrayList<Placeholder>();
 	private HashMap<String, Placeholder> placeholders = null;
+	private HashMap<String, Placeholder> keyPlaceholderToUpdate = new HashMap<String, Placeholder>();
 	
 	private String region = null;
 	private boolean resultsCheckOK = true;
@@ -97,7 +100,10 @@ public class GSync {
 		scanLocalDir();
 
 		parsePlaceholderFiles();
-		if (resultsCheckOK == false) return;
+		if (resultsCheckOK == false) {
+			if (updateS3Keys && keyPlaceholderToUpdate.size() != 0) updateKeys();
+			return;
+		}
 
 		scanBucket();
 		
@@ -128,6 +134,64 @@ public class GSync {
 		s3.shutdown();
 		
 	}
+	/**Attempts to update the S3 keys to match the current placeholder file
+	 * @throws IOException */
+	private void updateKeys() throws IOException {
+		p("\nAttempting to update S3 keys to match local placeholder paths...");
+		
+		//need to check that the S3 key exists
+		//need to check that the destination key does not exist
+		
+		//make hash of destination keys
+		HashSet<String> destinationKeys = new HashSet<String>();
+		for (Placeholder p: keyPlaceholderToUpdate.values()) destinationKeys.add(p.getLocalFile().getCanonicalPath().substring(1));
+		ArrayList<String> destinationKeysAlreadyExisting = new ArrayList<String>(); 
+		
+		String region = Util.getRegionFromCredentials();
+		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		ListObjectsV2Result result;
+		
+		//must watch for truncated results
+		do {
+			result = s3.listObjectsV2(bucketName);
+			//for each S3Object
+			for (S3ObjectSummary os : result.getObjectSummaries()) {
+				String key = os.getKey();
+				Placeholder p = keyPlaceholderToUpdate.get(key);
+				if (p != null) p.setFoundInS3(true);
+				if (destinationKeys.contains(key)) destinationKeysAlreadyExisting.add(key);
+			}
+			result.setContinuationToken(result.getNextContinuationToken());
+		} while (result.isTruncated());
+		
+		//Look for problems
+		boolean okToFix = true;
+		
+		//Missing S3 Objects?
+		for (Placeholder p: keyPlaceholderToUpdate.values()) {
+			if (p.isFoundInS3() == false) {
+				//here
+				okToFix = false;
+			}
+		}
+		
+		//Existing destination keys?
+		if (destinationKeysAlreadyExisting.size() != 0) {
+			//here
+			okToFix = false;
+		}
+		
+        //run fix?
+		if (okToFix) {
+			//copy and then delete S3Object
+			//update placeholder file
+			//here
+		}
+        
+        
+		
+	}
+
 
 	private void delete() throws Exception{
 		p("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
@@ -379,9 +443,9 @@ public class GSync {
 			boolean ok = true;
 			boolean restoreType = false;
 			boolean deleteType = false;
-			
+
 			//create the local file, it may or may not exist
-			File local = new File("/"+p.getAttribute("key"));
+			File local = new File("/"+p.getAttribute("key")).getCanonicalFile();
 			p.setLocalFile(local);
 			
 			//found in S3
@@ -406,7 +470,7 @@ public class GSync {
 						ok = false;
 						//check size
 						long pSize = Long.parseLong(p.getAttribute("size"));
-						if (pSize == local.length()) p.addErrorMessage("The local file already exists. Size matches. File looks as if it is already restored? Recommend deleting the restore placeholder.\n\t\trm -f "+ p.getPlaceHolderFile());
+						if (pSize == local.length()) p.addErrorMessage("The local file already exists. Size matches. File looks as if it is already restored? Delete the restore placeholder?\n\t\trm -f "+ p.getPlaceHolderFile());
 						else p.addErrorMessage("The local file already exists. The sizes do not match! Suspect partial restore. Recommend deleting the local file.\n\t\trm -f "+p.getLocalFile());
 					}
 				}
@@ -450,46 +514,52 @@ public class GSync {
 		region = Util.getRegionFromCredentials();
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		
-		ListObjectsV2Result result = s3.listObjectsV2(bucketName);
-        List<S3ObjectSummary> objects = result.getObjectSummaries();
-        p("\t"+objects.size()+ " S3 objects");
+		ListObjectsV2Result result;
         if (debug) p("\tKey\tSize\tStorage");
         
-        for (S3ObjectSummary os: objects) {
-        	String key = os.getKey();
-            if (debug) p("\t" + key+"\t"+os.getSize()+"\t"+os.getStorageClass());
+        //must watch for truncated results
+        do {
+            result = s3.listObjectsV2(bucketName);
 
-        	//check candidatesForUpload
-        	if (candidatesForUpload.containsKey(key)) {
-        		//OK, a local fat old file with the same name has already been uploaded to S3
-        		//check size and etag
-        		if (os.getSize() == candidatesForUpload.get(key).length()) {
-        			//check for a placeholder
-        			if (placeholders.containsKey(key))localFileAlreadyUploaded.add(candidatesForUpload.get(key));
-        			else  localFileAlreadyUploadedNoPlaceholder.add(candidatesForUpload.get(key));
-        		}
-        		else localFileAlreadyUploadedButDiffSize.add(candidatesForUpload.get(key));
-        	}
-        	
-        	//check placeholders
-        	if (placeholders.containsKey(key)) {
-        		//OK, a local placeholder file contains the aws key
-        		Placeholder p = placeholders.get(key);
-        		p.setFoundInS3(true);
-        		//check size
-        		String size = p.getAttribute("size");
-        		if (Long.parseLong(size) == os.getSize()) p.setS3SizeMatches(true);
-        		else p.setS3SizeMatches(false);
-        		//check etag
-        		if (p.getAttribute("etag").equals(os.getETag())) p.setS3EtagMatches(true);
-        		else p.setS3EtagMatches(false);
-        	}
-        	
-        	else if (os.getSize() != 0) {
-        		//OK, this is an unknown s3 object with no local reference
-        		s3KeyWithNoLocal.add(key);
-        	}
-        }
+            for (S3ObjectSummary os : result.getObjectSummaries()) {
+            	String key = os.getKey();
+                if (debug) p("\t" + key+"\t"+os.getSize()+"\t"+os.getStorageClass());
+
+            	//check candidatesForUpload
+            	if (candidatesForUpload.containsKey(key)) {
+            		//OK, a local fat old file with the same name has already been uploaded to S3
+            		//check size and etag
+            		if (os.getSize() == candidatesForUpload.get(key).length()) {
+            			//check for a placeholder
+            			if (placeholders.containsKey(key))localFileAlreadyUploaded.add(candidatesForUpload.get(key));
+            			else  localFileAlreadyUploadedNoPlaceholder.add(candidatesForUpload.get(key));
+            		}
+            		else localFileAlreadyUploadedButDiffSize.add(candidatesForUpload.get(key));
+            	}
+            	
+            	//check placeholders
+            	if (placeholders.containsKey(key)) {
+            		//OK, a local placeholder file contains the aws key
+            		Placeholder p = placeholders.get(key);
+            		p.setFoundInS3(true);
+            		//check size
+            		String size = p.getAttribute("size");
+            		if (Long.parseLong(size) == os.getSize()) p.setS3SizeMatches(true);
+            		else p.setS3SizeMatches(false);
+            		//check etag
+            		if (p.getAttribute("etag").equals(os.getETag())) p.setS3EtagMatches(true);
+            		else p.setS3EtagMatches(false);
+            	}
+            	
+            	else if (os.getSize() != 0) {
+            		//OK, this is an unknown s3 object with no local reference
+            		s3KeyWithNoLocal.add(key);
+            	}
+            }
+
+            result.setContinuationToken(result.getNextContinuationToken());
+        } while (result.isTruncated());
+        
 	}
 
 	/**Check the placeholders for issues.*/
@@ -512,8 +582,9 @@ public class GSync {
 				
 			}
 			else {
-				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so move the S3 object to match and update the key attribute in this placeholder file" );
+				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so move the S3 object to match and update the key attribute in this placeholder file." );
 				failingPlaceholders.add(p);
+				keyPlaceholderToUpdate.put(key, p);
 			}
 		}
 		//any failing paths?

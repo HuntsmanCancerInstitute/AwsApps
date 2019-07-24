@@ -2,11 +2,15 @@ package edu.utah.hci.aws.util;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.text.NumberFormat;
@@ -221,6 +225,28 @@ public class Util {
 		PrintWriter out = new PrintWriter (new FileWriter (p));
 		for (String s: attributes) out.println(s);
 		out.close();
+	}
+	
+	/** Fast & simple file copy. From GForman http://www.experts-exchange.com/M_500026.html
+	 * Hit an odd bug with a "Size exceeds Integer.MAX_VALUE" error when copying a vcf file. -Nix.*/
+	public static boolean copyViaFileChannel(File source, File dest){
+		FileChannel in = null, out = null;
+		try {
+			in = new FileInputStream(source).getChannel();
+			out = new FileOutputStream(dest).getChannel();
+			long size = in.size();
+			MappedByteBuffer buf = in.map(FileChannel.MapMode.READ_ONLY, 0, size);
+			out.write(buf);
+		} catch (IOException e) {
+			e.printStackTrace();
+			return false;
+		} finally {
+			try {
+				if (in != null) in.close();
+				if (out != null) out.close();
+			} catch (IOException e1) {}
+		}
+		return true;
 	}
 
 }
