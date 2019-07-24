@@ -1,6 +1,8 @@
 package edu.utah.hci.aws.apps.gsync;
 
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,6 +15,8 @@ import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -55,10 +59,15 @@ public class GSync {
 	private String region = null;
 	private boolean resultsCheckOK = true;
 
+	//uploads
 	private ArrayList<File> localFileAlreadyUploaded = new ArrayList<File>();
 	private ArrayList<File> localFileAlreadyUploadedButDiffSize = new ArrayList<File>();
 	private ArrayList<File> localFileAlreadyUploadedNoPlaceholder = new ArrayList<File>();
 	private ArrayList<String> s3KeyWithNoLocal = new ArrayList<String>();
+	
+	//ready for restore or delete
+	private ArrayList<Placeholder> restorePlaceholders = new ArrayList<Placeholder>();
+	private ArrayList<Placeholder> deletePlaceholders = new ArrayList<Placeholder>();
 
 	private AmazonS3 s3 = null;
 
@@ -95,18 +104,93 @@ public class GSync {
 		checkPlaceholders();
 		if (resultsCheckOK == false) return;
 		
-		removeLocalFromCandidates();
-		
-		//call after removeLocalFromCandidates()
-		if (deleteUploaded) deleteAlreadyUploaded();
+		removeLocalFromUploadCandidates();
 		
 		printResults();
 
-		if (dryRun == false && resultsCheckOK == true) execute();
+		if (dryRun == false && resultsCheckOK == true) {
+			
+			//delete already uploaded local files from prior GSync run
+			if (deleteUploaded) deleteAlreadyUploaded();
+			
+			upload();
+			
+			if (deletePlaceholders.size() != 0) delete();
+			
+			if (restorePlaceholders.size() != 0) {
+				String error = restore();
+				if (error.length() != 0) throw new IOException(error);
+			}
+			
+			
+		}
 
 		s3.shutdown();
 		
 	}
+
+	private void delete() throws Exception{
+		p("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
+		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		for (Placeholder p : deletePlaceholders) {
+			if (verbose) p("\t"+p.getAttribute("key")+"\t"+p.getPlaceHolderFile()+"\t"+p.getLocalFile());
+			s3.deleteObject(bucketName, p.getAttribute("key"));
+			p.getPlaceHolderFile().delete();
+			if (p.getLocalFile() != null) p.getLocalFile().delete();
+		}
+		p("\t"+deletePlaceholders.size()+" AWS and local resources deleted (versioned S3 objects can still be recovered)");
+	}
+	
+	private String restore() {
+		p("\nRestoring S3 Objects and renaming their restore placeholders to standard...");
+		FileOutputStream fos = null;
+		S3ObjectInputStream s3is = null;
+		File localFile = null;
+		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		try {
+			for (Placeholder p : restorePlaceholders) {
+				String key = p.getAttribute("key");
+				if (verbose) p("\t"+key+"\t"+p.getPlaceHolderFile());
+
+				//download object
+				S3Object o = s3.getObject(bucketName, key);
+				s3is = o.getObjectContent();
+				localFile = p.getLocalFile();
+				fos = new FileOutputStream(localFile);
+				byte[] read_buf = new byte[1024];
+				int read_len = 0;
+				while ((read_len = s3is.read(read_buf)) > 0) fos.write(read_buf, 0, read_len);
+				s3is.close();
+				fos.close();
+				
+				//check the size
+				long placeholderSize = Long.parseLong(p.getAttribute("size"));
+				if (placeholderSize != localFile.length()) throw new IOException("The restored file's size ("+localFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
+				
+				//rename the placeholder file
+				File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
+				p.getPlaceHolderFile().renameTo(stdPlaceholder);
+				
+			}
+		} catch (Exception e) {
+			//delete the local
+			if (localFile != null) localFile.delete();
+			
+			//close the IO
+			try {
+				if (s3is != null)s3is.close();
+				if (fos != null)fos.close();
+				s3.shutdown();
+			} catch (IOException ex) {}
+			
+			//return the error
+			if (verbose) e.printStackTrace();
+			return "\nRESTORE ERROR: "+e.getMessage();
+		} 
+		p("\t"+restorePlaceholders.size()+" resources restored");
+		return "";
+	}
+
 
 	private void deleteAlreadyUploaded() throws IOException {
 
@@ -117,7 +201,7 @@ public class GSync {
 				f.delete();
 			}
 		}
-		else if (verbose) p("\nNo local files were found that have already been uploaded.");
+		else if (debug) p("\nNo local files were found that have already been uploaded.");
 		localFileAlreadyUploaded.clear();
 	}
 
@@ -128,7 +212,7 @@ public class GSync {
 		debug = true;
 	}
 
-	private void execute() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
+	private void upload() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
 		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
 		
 		//anything to upload?  all of these methods throw an IOException 
@@ -155,10 +239,9 @@ public class GSync {
 				for (File x: toDelete) p("rm -f "+x.getCanonicalPath());
 			}
 		}
-		else if (verbose) p("\nNo files to upload.");
+		else if (debug) p("\nNo files to upload.");
 		
 		tm.shutdownNow();
-		
 	}
 
 	private void writePlaceholder(File f, String etag) throws IOException {
@@ -200,8 +283,7 @@ public class GSync {
 	    return u.waitForUploadResult().getETag();
 	}
 	
-	private void removeLocalFromCandidates() throws IOException {
-
+	private void removeLocalFromUploadCandidates() throws IOException {
 		// remove localFileAlreadyUploaded from candidatesForUpload
 		for (File f: localFileAlreadyUploaded) candidatesForUpload.remove(f.getCanonicalPath().substring(1));
 		
@@ -249,18 +331,38 @@ public class GSync {
 		}
 		else if (verbose) p("\nNo S3 objects were found that lacked local placeholder references.");
 		
-		//ready for upload
 		if (resultsCheckOK) {
+			
+			//ready for upload
 			if (candidatesForUpload.size() !=0) {
 				if (dryRun) {
 					p("\nThe following local files are ready for upload to S3 and replacement with a placeholder file.");
 					for (String f: candidatesForUpload.keySet()) p("\t/"+f);
 				}
 			}
-			else {
-				if (verbose) p("\nNo local files were found that are ready for upload.");
-				else if (localFileAlreadyUploaded.size() == 0) p("\tAll synced, nothing to do.");
+			else if (verbose) p("\nNo local files were found that are ready for upload.");
+			
+			//any restores
+			if (restorePlaceholders.size() != 0) {
+				if (dryRun) {
+					p("\nThe following S3 Objects are ready for download and will replace their associated restore placeholder files.");
+					for (Placeholder p : restorePlaceholders) p("\t"+p.getAttribute("key")+" \t "+p.getPlaceHolderFile());
+				}
 			}
+			else if (verbose) p("\nNo restore placeholder files were found.");
+			
+			//any deletes
+			if (deletePlaceholders.size() != 0) {
+				if (dryRun) {
+					p("\nThe following S3 Objects, their associated delete placeholder file, and any corresponding local file are ready for deletion.");
+					for (Placeholder p : deletePlaceholders) p("\t"+p.getAttribute("key")+"\t"+p.getPlaceHolderFile()+"\t"+p.getLocalFile());
+				}
+			}
+			else if (verbose) p("\nNo delete placeholder files were found.");
+			
+			
+			//all synced?
+			if (candidatesForUpload.size() == 0 && localFileAlreadyUploaded.size() == 0 && restorePlaceholders.size() == 0 && deletePlaceholders.size() == 0) p("\nAll synced, nothing to do.");
 		}
 		
 		
@@ -271,9 +373,17 @@ public class GSync {
 
 
 	private void checkPlaceholders() throws IOException {
+		
 		p("\nChecking placeholder files...");
 		for (Placeholder p: placeholders.values()) {
 			boolean ok = true;
+			boolean restoreType = false;
+			boolean deleteType = false;
+			
+			//create the local file, it may or may not exist
+			File local = new File("/"+p.getAttribute("key"));
+			p.setLocalFile(local);
+			
 			//found in S3
 			if (p.isFoundInS3() == false) {
 				ok = false;
@@ -289,19 +399,26 @@ public class GSync {
 					ok = false;
 					p.addErrorMessage("S3 object etag doesn't match the etag in this placeholder file.");
 				}
-				//restore?
+				//restore? 
 				if (p.getType().equals(Placeholder.TYPE_RESTORE)) {
-					//does the restored file already exist?
-					File local = new File("/"+p.getAttribute("key"));
+					restoreType = true;
 					if (local.exists()) {
 						ok = false;
-						p.addErrorMessage("The local file already exists. Suspect a failed download.");
+						//check size
+						long pSize = Long.parseLong(p.getAttribute("size"));
+						if (pSize == local.length()) p.addErrorMessage("The local file already exists. Size matches. File looks as if it is already restored? Recommend deleting the restore placeholder.\n\t\trm -f "+ p.getPlaceHolderFile());
+						else p.addErrorMessage("The local file already exists. The sizes do not match! Suspect partial restore. Recommend deleting the local file.\n\t\trm -f "+p.getLocalFile());
 					}
 				}
+				//delete?
+				else if (p.getType().equals(Placeholder.TYPE_DELETE)) deleteType = true;
 			}
 			//save it
-			if (ok) placeholders.put(p.getAttribute("key"), p);
-			else failingPlaceholders.add(p);
+			if (ok == false) failingPlaceholders.add(p);
+			else {
+				if (restoreType) restorePlaceholders.add(p);
+				else if (deleteType) deletePlaceholders.add(p);
+			}
 		}
 		
 		
@@ -553,11 +670,13 @@ public class GSync {
 				"GSync pushes files with a particular extention that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
 				"correctly uploaded, GSync replaces the original file with a local txt placeholder file \n"+
-				"containing information about the S3 object. Symbolic links are ignored.\n"+
+				"containing information about the S3 object. Files are restored or deleted by modifying\n"+
+				"the name of the placeholder file. Symbolic links are ignored.\n"+
 				
 				"\nWARNING! This app has the potential to destroy precious genomic data. TEST IT on a\n"+
 				"pilot system before depolying in production. BACKUP your local files and ENABLE S3\n"+
-				"Object Versioning before running.\n"+
+				"Object Versioning before running.  This app is provided with no guarrentee of proper\n"+
+				"function.\n"+
 				
 				"\nTo use the app:\n"+ 
 				"1) Create a new S3 bucket dedicated solely to this purpose. Use it for nothing else.\n"+
@@ -570,6 +689,13 @@ public class GSync {
 				"   aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A\n"+
 				"   aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
 				"   region = us-west-2\n"+
+				"4) Execute GSync to upload large old files to S3 and replace them with a placeholder\n"+
+				"   named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
+				"5) To download and restore an archived file, rename the placeholder xxx."+Placeholder.RESTORE_PLACEHOLDER_EXTENSION+"\n"+
+				"   and run GSync.\n"+
+				"6) To delete an archived file, it's placeholder, and any local files, rename the \n"+
+				"   placeholder xxx."+Placeholder.DELETE_PLACEHOLDER_EXTENSION+" and run GSync.\n"+
+				"   Versioned copies on S3 will not be deleted. Use the S3 Console to do so.\n"+
 				
 				"\nRequired:\n"+
 				"-d Path to a local directory to sync\n"+
