@@ -1,5 +1,5 @@
 # AwsApps
-Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Also includes exhaustive JUnit testing for each app.
+Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app.
 <pre>
 **************************************************************************************
 **                                 GSync : July 2019                                **
