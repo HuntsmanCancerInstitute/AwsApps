@@ -8,6 +8,9 @@ import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.amazonaws.services.s3.transfer.TransferManager;
+import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
+import com.amazonaws.services.s3.transfer.Upload;
 
 import edu.utah.hci.aws.util.Util;
 
@@ -30,7 +33,8 @@ import java.util.List;
  */
 public class TestGSync {
 
-	//Adjust these fields to match your testing environment
+	/*Adjust these fields to match your testing environment	 */
+	
 	/**Be sure this bucket exists and doesn't contain anything you care about. WARNING, it will be emptied!*/
 	private static final String testS3BucketName = "hcibioinfo-gsync-test";
 
@@ -39,9 +43,11 @@ public class TestGSync {
 
 
 
-	//No need to modify anything below
-
-	/**Relative paths of data files that should be uploaded*/
+	
+	
+	/* No need to modify anything below */
+	
+	/*Relative paths of data files that should be uploaded*/
 	private static String[] filesForUpload = {
 			"GSync/Gz/testNoIndex.bed.gz",
 			"GSync/Cram/testShortIndex.cram",
@@ -56,13 +62,13 @@ public class TestGSync {
 			"GSync/Bam/testShortIndex.bai"
 	};
 
+	/*Relative paths of data files that should not be uploaded*/
 	private static String[] filesNotForUpload = {
 			"GSync/NoUpload/testTooRecent.bed.gz",
 			"GSync/NoUpload/testTooSmall.bed.gz",
 			"GSync/NoUpload/testTooSmall.bed.gz.tbi",
 			"GSync/NoUpload/testWrongExtension.bed"
 	};
-
 
 	@Test
 	public void testDirectoryScan() {
@@ -204,7 +210,6 @@ public class TestGSync {
 				assertTrue (pSize == uploadKeySize.get(s));
 			}
 
-
 		} catch (Exception e) {
 			System.err.println(e.getMessage());
 			e.printStackTrace();
@@ -248,7 +253,10 @@ public class TestGSync {
 			gsp.setBucketName(testS3BucketName);
 			gsp.setDryRun(false);
 			gsp.setDeleteUploaded(true);
-			gsp.doWork();
+			//trap exception
+			try {
+				gsp.doWork();
+			} catch (Exception e) {}
 
 			//check that there are problems
 			assertFalse(gsp.isResultsCheckOK());
@@ -279,7 +287,6 @@ public class TestGSync {
 			ph2.getAttributes().put("etag", "badEtag");
 			ph2.writePlaceholder(pFile2);
 
-
 			//run a third time, this will throw lots of errors
 			GSync gs2 = new GSync();
 			gs2.setLocalDir(new File(pathToTestData+"/GSync"));
@@ -287,7 +294,10 @@ public class TestGSync {
 			gs2.setBucketName(testS3BucketName);
 			gs2.setDryRun(false);
 			gs2.setDeleteUploaded(true);
-			gs2.doWork();
+			//trap exception
+			try {
+				gs2.doWork();
+			} catch (Exception e) {}
 
 			//check that there are problems
 			assertFalse(gsp.isResultsCheckOK());
@@ -380,7 +390,10 @@ public class TestGSync {
 			gs4.setBucketName(testS3BucketName);
 			gs4.setDryRun(false);
 			gs4.setDeleteUploaded(true);
-			gs4.doWork();
+			//trap exception
+			try {
+				gs4.doWork();
+			} catch (Exception e) {}
 
 			//check that there were problems
 			assertFalse(gs4.isResultsCheckOK());
@@ -389,7 +402,6 @@ public class TestGSync {
 			Placeholder failingP = gs4.getFailingPlaceholders().get(0);
 			assertTrue(failingP.getPlaceHolderFile().toString().equals(aRestore.toString()));
 			assertTrue(failingP.getErrorMessages().get(0).contains("size"));
-
 
 		} catch (Exception e) {
 			System.err.println(e.getMessage());
@@ -460,13 +472,97 @@ public class TestGSync {
 			gs3.setBucketName(testS3BucketName);
 			gs3.setDryRun(false);
 			gs3.setDeleteUploaded(false);
-			gs3.doWork();
+			//trap exception
+			try {
+				gs3.doWork();
+			} catch (Exception e) {}
 			assertFalse(gs3.isResultsCheckOK());
 
 			Placeholder failingP = gs3.getFailingPlaceholders().get(0);
 			assertTrue(failingP.getErrorMessages().get(0).contains("S3 Object"));
 
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+			e.printStackTrace();
+			fail("Exception caught.");
+		}
+	}
+	
+	@Test
+	public void testMove() {
+		try {
+			setupLocalDir();
+			emptyS3Bucket();
 
+			//run an upload with no deletion of local files
+			GSync gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+
+			//check S3 object is present
+			String s3Key = pathToTestData.substring(1)+filesForUpload[0];
+			HashMap<String, S3ObjectSummary> s3Sum = fetchS3Objects();
+			assertTrue(s3Sum.containsKey(s3Key));
+
+			//move a placeholder to a diff folder
+			File oriPlaceholder = new File(pathToTestData+filesForUpload[0]+Placeholder.PLACEHOLDER_EXTENSION);
+			File dest = new File(pathToTestData+"GSync/Cram/"+oriPlaceholder.getName());
+			oriPlaceholder.renameTo(dest);
+
+			//run a second time and indicate a update
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			//trap exception
+			try {
+				gs.doWork();
+			} catch (Exception e) {}
+			
+			assertFalse(gs.isResultsCheckOK());
+			
+			//show the ori is gone, the dest is pres at file system and S3 system levels
+			HashMap<String, S3ObjectSummary> os = fetchS3Objects();
+			assertFalse(oriPlaceholder.exists());
+			assertTrue(dest.exists());
+			String oriKey = Placeholder.PLACEHOLDER_PATTERN.matcher(oriPlaceholder.getCanonicalPath()).replaceFirst("").substring(1);
+			String destKey = Placeholder.PLACEHOLDER_PATTERN.matcher(dest.getCanonicalPath()).replaceFirst("").substring(1);
+			assertFalse(os.containsKey(oriKey));
+			assertTrue(os.containsKey(destKey));
+			
+			//show the internal key in the moved placeholder has been updated
+			Placeholder updatedP = new Placeholder(dest);
+			assertTrue(updatedP.getAttribute("key").equals(destKey));
+			
+			//delete s3 object then attempt a move
+			deleteS3Object(destKey);
+			File newDest = new File(pathToTestData+"GSync/Bam/"+oriPlaceholder.getName());
+			dest.renameTo(newDest);
+			
+			//run a third time, should fail due to missing s3 object
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			//trap exception
+			try {
+				gs.doWork();
+			} catch (Exception e) { 
+				assertTrue(e.getMessage().contains("Problems found with current or destination keys"));
+			}
+			
+			assertFalse(gs.isResultsCheckOK());
 
 		} catch (Exception e) {
 			System.err.println(e.getMessage());
@@ -475,6 +571,61 @@ public class TestGSync {
 		}
 	}
 
+	@Test
+	public void testBrokenMove() {
+		try {
+			
+
+			//setup
+			setupLocalDir();
+			emptyS3Bucket();
+			GSync gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			
+			//move a placeholder to a diff folder
+			File oriPlaceholder = new File(pathToTestData+filesForUpload[0]+Placeholder.PLACEHOLDER_EXTENSION);
+			File destPlaceholder = new File(pathToTestData+"GSync/Cram/"+oriPlaceholder.getName());
+			oriPlaceholder.renameTo(destPlaceholder);
+			
+			
+			//upload a new file to S3 with a key that is the destination of a future update
+			File uploadFile = new File(pathToTestData+filesNotForUpload[0]);
+			String key = pathToTestData+"GSync/Cram/testNoIndex.bed.gz";
+
+			AmazonS3 s3 = AmazonS3ClientBuilder.standard().withRegion(Util.getRegionFromCredentials()).build();
+			TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
+			Upload u = tm.upload(testS3BucketName, key.substring(1), uploadFile);
+			if (Util.waitForCompletion(u) == false) throw new IOException("Failed S3 upload "+uploadFile);
+			
+			//attempt an update of paths, this will fail
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			//trap exception
+			try {
+				gs.doWork();
+			} catch (Exception e) { 
+				assertTrue(e.getMessage().contains("Problems found with current or destination keys"));
+			}
+			assertFalse(gs.isResultsCheckOK());
+			
+
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+			e.printStackTrace();
+			fail("Exception caught.");
+		}
+	}
 
 
 	/**Returns key:objectSummary */

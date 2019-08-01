@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
 import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.CopyObjectResult;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
@@ -85,9 +86,10 @@ public class GSync {
 			double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
 			p("\nDone! "+Math.round(diffTime)+" minutes\n");
 
-		} catch (Exception e) {
-			if (verbose) e.printStackTrace();
-			else p(e.getMessage());
+		} catch (Exception ex) {
+			if (s3 != null) s3.shutdown();
+			if (verbose) ex.printStackTrace();
+			else e(ex.getMessage());
 			System.exit(1);
 		} finally {
 			
@@ -101,14 +103,17 @@ public class GSync {
 
 		parsePlaceholderFiles();
 		if (resultsCheckOK == false) {
-			if (updateS3Keys && keyPlaceholderToUpdate.size() != 0) updateKeys();
+			if (updateS3Keys && keyPlaceholderToUpdate.size() != 0) {
+				String error = updateKeys();
+				if (error != null) throw new Exception(error);
+			}
 			return;
 		}
 
 		scanBucket();
 		
 		checkPlaceholders();
-		if (resultsCheckOK == false) return;
+		if (resultsCheckOK == false) throw new Exception("Problem with placeholder files.");
 		
 		removeLocalFromUploadCandidates();
 		
@@ -127,24 +132,27 @@ public class GSync {
 				String error = restore();
 				if (error.length() != 0) throw new IOException(error);
 			}
-			
-			
 		}
 
 		s3.shutdown();
 		
 	}
 	/**Attempts to update the S3 keys to match the current placeholder file
-	 * @throws IOException */
-	private void updateKeys() throws IOException {
+	 * @throws IOException 
+	 * @return null if no problems or error statement.*/
+	private String updateKeys() throws IOException {
 		p("\nAttempting to update S3 keys to match local placeholder paths...");
 		
 		//need to check that the S3 key exists
 		//need to check that the destination key does not exist
 		
-		//make hash of destination keys
+		//make hash of destination keys and clear error messages
 		HashSet<String> destinationKeys = new HashSet<String>();
-		for (Placeholder p: keyPlaceholderToUpdate.values()) destinationKeys.add(p.getLocalFile().getCanonicalPath().substring(1));
+		for (Placeholder p: keyPlaceholderToUpdate.values()) {
+			String cp = p.getPlaceHolderFile().getCanonicalPath();
+			String newKey = Placeholder.PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("").substring(1);
+			destinationKeys.add(newKey);
+		}
 		ArrayList<String> destinationKeysAlreadyExisting = new ArrayList<String>(); 
 		
 		String region = Util.getRegionFromCredentials();
@@ -168,28 +176,52 @@ public class GSync {
 		boolean okToFix = true;
 		
 		//Missing S3 Objects?
-		for (Placeholder p: keyPlaceholderToUpdate.values()) {
-			if (p.isFoundInS3() == false) {
-				//here
+		for (Placeholder ph: keyPlaceholderToUpdate.values()) {
+			if (ph.isFoundInS3() == false) {
+				p("\tMissing S3 Object "+ph.getAttribute("key"));
 				okToFix = false;
 			}
 		}
 		
 		//Existing destination keys?
 		if (destinationKeysAlreadyExisting.size() != 0) {
-			//here
+			for (String key: destinationKeysAlreadyExisting) p("\tDestination key already exists "+key);
 			okToFix = false;
 		}
 		
-        //run fix?
+		//run fix? 
+		String error = null;
 		if (okToFix) {
-			//copy and then delete S3Object
-			//update placeholder file
-			//here
+			Placeholder working = null;
+			String sum = null;
+			// each execution will throw errors if problems were encountered, catch them to include info in error
+			try {
+				for (Placeholder ph: keyPlaceholderToUpdate.values()) {
+					working = ph;
+					String currKey = working.getAttribute("key");
+					String destKey = Placeholder.PLACEHOLDER_PATTERN.matcher(ph.getPlaceHolderFile().getCanonicalPath()).replaceFirst("").substring(1);
+					
+					
+					sum = "\t"+currKey+" -> "+destKey+" updating "+working.getPlaceHolderFile();
+					if (verbose) p(sum);
+					//copy object to new location
+					s3.copyObject(bucketName, currKey, bucketName, destKey);
+					//delete the original
+					s3.deleteObject(bucketName, currKey);
+					//update placeholder
+					working.getAttributes().put("key", destKey);
+					working.writePlaceholder(ph.getPlaceHolderFile());
+				}
+				if (verbose) p("\tAll keys sucessfully updated. Ready to relaunch GSync.");
+			} catch (Exception e) {
+				error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+sum+"\n"+e.getMessage();
+				e(error);
+				if (debug) e.printStackTrace();
+			} 
 		}
-        
-        
-		
+		else error = "\tProblems found with current or destination keys. Address and restart.";
+		s3.shutdown();
+		return error;
 	}
 
 
@@ -203,6 +235,7 @@ public class GSync {
 			if (p.getLocalFile() != null) p.getLocalFile().delete();
 		}
 		p("\t"+deletePlaceholders.size()+" AWS and local resources deleted (versioned S3 objects can still be recovered)");
+		s3.shutdown();
 	}
 	
 	private String restore() {
@@ -251,6 +284,7 @@ public class GSync {
 			if (verbose) e.printStackTrace();
 			return "\nRESTORE ERROR: "+e.getMessage();
 		} 
+		s3.shutdown();
 		p("\t"+restorePlaceholders.size()+" resources restored");
 		return "";
 	}
@@ -277,6 +311,7 @@ public class GSync {
 	}
 
 	private void upload() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
+		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
 		
 		//anything to upload?  all of these methods throw an IOException 
@@ -506,6 +541,9 @@ public class GSync {
 	private static void p(String s) {
 		System.out.println(s);
 	}
+	private static void e(String s) {
+		System.err.println(s);
+	}
 
 	private void scanBucket() throws IOException {
 		
@@ -560,6 +598,7 @@ public class GSync {
             result.setContinuationToken(result.getNextContinuationToken());
         } while (result.isTruncated());
         
+        s3.shutdown();
 	}
 
 	/**Check the placeholders for issues.*/
@@ -582,15 +621,19 @@ public class GSync {
 				
 			}
 			else {
-				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so move the S3 object to match and update the key attribute in this placeholder file." );
+				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so attempt a fix by running GSync with the -u option." );
 				failingPlaceholders.add(p);
 				keyPlaceholderToUpdate.put(key, p);
 			}
 		}
 		//any failing paths?
 		if (failingPlaceholders.size() !=0) {
-			p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
-			for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
+			//is it just key mismatches and they want to update them
+			if (failingPlaceholders.size() != keyPlaceholderToUpdate.size() || updateS3Keys == false) {
+				p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
+				for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
+			}
+			//otherwise don't print the error message
 			resultsCheckOK = false;
 		}
 		else p("\t"+placeholders.size()+" placeholder files");
@@ -696,6 +739,7 @@ public class GSync {
 					case 'e': fileExtensions = Util.COMMA.split(args[++i]); break;
 					case 'r': dryRun = false; break;
 					case 'v': verbose = true; break;
+					case 'u': updateS3Keys = true; break;
 					case 'k': deleteUploaded = true; break;
 					case 'x': debug = true; break;
 					case 'h': printDocs(); System.exit(0);
@@ -729,6 +773,7 @@ public class GSync {
 		p("  -a Min file days    : "+ minDaysOld);
 		p("  -g Min file GB      : "+ minGigaBytes);
 		p("  -r Dry run          : "+ dryRun);
+		p("  -u Update S3 keys   : "+ updateS3Keys);
 		p("  -v Verbose output   : "+ verbose);
 		p("  -k Delete uploaded files : "+ deleteUploaded);
 	}
@@ -780,6 +825,8 @@ public class GSync {
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
 				"-k Delete local files that were sucessfully uploaded, defaults to just printing\n"+
 				"     'rm -r xxx' statements. Use with caution!\n"+
+				"-u Update S3 Object keys to match current placholder paths. Defaults to reporting\n"+
+				"     issues.  Only use if placeholders have been moved.\n"+
 				"-v Verbose output. Use -x for very verbose output.\n"+
 
 				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d /Repo/ -b hcibioinfo_gsync_repo \n"+
@@ -870,5 +917,10 @@ public class GSync {
 
 	public ArrayList<Placeholder> getFailingPlaceholders() {
 		return failingPlaceholders;
+	}
+
+
+	public void setUpdateS3Keys(boolean updateS3Keys) {
+		this.updateS3Keys = updateS3Keys;
 	}
 }
