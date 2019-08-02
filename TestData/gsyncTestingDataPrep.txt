@@ -1,4 +1,5 @@
-# Execute the following to set up the GSync test dir and bucket before running the JUnit testing
+# Execute the following to set up the GSync test dir for manual testing
+# Run the TestGSync JUnit app to systematically test GSync
 
 cd /Users/u0028003/Code/AwsApps/TestData
 

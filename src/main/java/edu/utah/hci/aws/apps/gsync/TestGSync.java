@@ -18,6 +18,9 @@ import static org.junit.Assert.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -574,8 +577,6 @@ public class TestGSync {
 	@Test
 	public void testBrokenMove() {
 		try {
-			
-
 			//setup
 			setupLocalDir();
 			emptyS3Bucket();
@@ -619,6 +620,136 @@ public class TestGSync {
 			}
 			assertFalse(gs.isResultsCheckOK());
 			
+
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+			e.printStackTrace();
+			fail("Exception caught.");
+		}
+	}
+	
+	@Test
+	public void testSymlinkUpdate() {
+		try {
+			//setup
+			setupLocalDir();
+			emptyS3Bucket();
+
+			//create a symlink in the Zip directory to a bam that's going to get uploaded and deleted
+			Path realBam = Paths.get(pathToTestData+filesForUpload[7]);
+			Path symlink = Paths.get(pathToTestData+"GSync/Zip/"+realBam.getFileName());
+			Files.createSymbolicLink(symlink, realBam);
+			assertTrue(Files.exists(symlink));
+
+			//run a gsync and delete uploaded files
+			GSync gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			assertFalse(Files.exists(realBam));
+
+			//rerun to update the symlink
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			
+			//test that old symlink is replaced with new
+			File newSymLink = new File(pathToTestData+"GSync/Zip/"+realBam.getFileName()+Placeholder.PLACEHOLDER_EXTENSION);
+			assertTrue(newSymLink.exists());
+			//check that it correctly points to the source
+			assertTrue(Files.exists(newSymLink.toPath()));
+			//old is deleted
+			assertFalse(symlink.toFile().exists());
+			
+			//restore the file by renaming the placeholder to the restore name
+			File placeholder = new File(realBam.toString()+Placeholder.PLACEHOLDER_EXTENSION);
+			assertTrue(placeholder.exists());
+			File restorePlaceholder = new File(realBam.toString()+Placeholder.RESTORE_PLACEHOLDER_EXTENSION);
+			placeholder.renameTo(restorePlaceholder);
+			
+			//rerun gsync to restore file, this will break the symlink
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			assertTrue(Files.exists(realBam));
+			
+			//run again to fix symlink to point to real bam
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			assertTrue(Files.exists(realBam));
+			
+			//check that symlink to real bam has been created and the old symlink deleted
+			assertTrue(symlink.toFile().exists());
+			assertFalse(newSymLink.exists());
+			
+			//delete the file
+			placeholder = new File(realBam.toString()+Placeholder.PLACEHOLDER_EXTENSION);
+			assertTrue(placeholder.exists());
+			File deletePlaceholder = new File(realBam.toString()+Placeholder.DELETE_PLACEHOLDER_EXTENSION);
+			placeholder.renameTo(deletePlaceholder);
+			
+			//rerun gsync to delete the file and placeholder, this will break the symlink
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			assertFalse(Files.exists(realBam));
+			
+			//rerun gsync to delete the symlink
+			gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.setUpdateS3Keys(true);
+			gs.setUpdateSymlinks(true);
+			gs.setVerbose(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+			assertFalse(symlink.toFile().exists());
+			
+			
+
 
 		} catch (Exception e) {
 			System.err.println(e.getMessage());
@@ -701,7 +832,7 @@ public class TestGSync {
 				"unzip -q GSync.zip",
 				"find GSync -print | while read filename; do touch -t 201801010101.01 $filename; done",
 				"touch GSync/NoUpload/testTooRecent.bed.gz",
-				"ln -s GSync/Bam/testWithIndex.bam GSync/NoUpload/testSymLink.bam"
+				"ln -s "+pathToTestData+"GSync/Bam/testWithIndex.bam "+pathToTestData+"GSync/NoUpload/testSymLink.bam"
 		};
 		String c = Util.stringArrayToString(cmds, "\n");
 		Util.executeShellScript(c, new File(pathToTestData));

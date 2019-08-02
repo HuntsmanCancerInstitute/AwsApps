@@ -6,6 +6,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,9 +49,9 @@ public class GSync {
 	private String[] fileExtensions = {".bam", ".cram",".gz", ".zip"};
 	private boolean dryRun = true;
 	private boolean verbose = false;
-	private boolean debug = false;
 	private boolean deleteUploaded = false;
 	private boolean updateS3Keys = false;
+	private boolean updateSymlinks = false;
 
 	//internal fields
 	private HashMap<String, File> candidatesForUpload = new HashMap<String, File>();
@@ -137,6 +138,7 @@ public class GSync {
 		s3.shutdown();
 		
 	}
+	
 	/**Attempts to update the S3 keys to match the current placeholder file
 	 * @throws IOException 
 	 * @return null if no problems or error statement.*/
@@ -216,7 +218,7 @@ public class GSync {
 			} catch (Exception e) {
 				error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+sum+"\n"+e.getMessage();
 				e(error);
-				if (debug) e.printStackTrace();
+				if (verbose) e.printStackTrace();
 			} 
 		}
 		else error = "\tProblems found with current or destination keys. Address and restart.";
@@ -224,7 +226,90 @@ public class GSync {
 		return error;
 	}
 
+	/**Assumes the Path is a symlink,  if broken, looks for the associated placeholder file,
+	 * if present, creates a new symlink pointed at the placeholder and deletes the original symlink.
+	 * Only works with full paths, not relative paths.*/
+	public void updateSymlink(Path symlink) throws IOException {
 
+		Path newSymlink = null;	
+		try {
+			//is it a placeholder?
+			if (symlink.toString().endsWith(Placeholder.PLACEHOLDER_EXTENSION)) {
+				Path target = Files.readSymbolicLink(symlink);
+
+				//does the target directory contain a delete or restore placeholder?  If so do nothing. Wait for gsync to delete or restore the primary
+				Path restore = Paths.get(target.toString().replaceFirst(Placeholder.PLACEHOLDER_EXTENSION, Placeholder.RESTORE_PLACEHOLDER_EXTENSION));
+				Path delete = Paths.get(target.toString().replaceFirst(Placeholder.PLACEHOLDER_EXTENSION, Placeholder.RESTORE_PLACEHOLDER_EXTENSION));
+
+				if (Files.exists(restore)==false && Files.exists(delete)==false) {
+					//has the primary file been restored?
+					String primary = target.toString().replaceFirst(Placeholder.PLACEHOLDER_EXTENSION, "");
+					File restoredFile = new File(primary).getCanonicalFile();
+					if (restoredFile.exists()) {
+						Path newLink = Paths.get(symlink.toString().replaceFirst(Placeholder.PLACEHOLDER_EXTENSION, ""));
+						if (dryRun) {
+							if (verbose) p("\tDryRun - Replace placeholder symlink "+symlink+" with symlink to restored file "+newLink);
+						}
+						else {
+							if (verbose) p("\tReplacing placeholder symlink "+symlink+" with symlink to restored file "+newLink);
+							//make new symlink
+							Files.createSymbolicLink(newLink, restoredFile.toPath());
+							//delete old
+							Files.delete(symlink);
+						}
+					}
+					else {
+						if (dryRun) {
+							if (verbose) p("\tDryRun - Delete broken symlink "+symlink);
+						}
+						else {
+							if (verbose) p("\tDeleting broken symlink "+symlink);
+							Files.delete(symlink);
+						}
+					}
+				}
+			}
+			//symlink not a placeholder
+			else {		
+				//look for a placeholder xxx.ArchiveInfo.txt
+				Path target = Files.readSymbolicLink(symlink);
+				Path archivedTarget = Paths.get(target.toString()+Placeholder.PLACEHOLDER_EXTENSION);
+				if (Files.exists(archivedTarget)) {
+					//create new
+					newSymlink = Paths.get(symlink.toString()+Placeholder.PLACEHOLDER_EXTENSION);
+					if (dryRun) {
+						if (verbose) p("\tDryRun - Placeholder exists! Create new symlink "+newSymlink+" and delete old "+symlink);
+					}
+					else {
+						if (verbose) p("\tPlaceholder exists! Creating new symlink "+newSymlink+" and deleting old "+symlink);
+						Files.createSymbolicLink(newSymlink, archivedTarget);
+						Files.delete(symlink);
+					}
+				}
+				//broken link?
+				else if (Files.exists(target)==false){
+					if (dryRun) {
+						if (verbose) p("\tDelete broken symlink "+symlink);
+					}
+					else {
+						if (verbose) p("\tDeleting broken symlink "+symlink);
+						Files.delete(symlink);
+					}
+				}
+			}
+		}
+		catch (IOException ioe) {
+			//attempt to delete the new symlink
+			if (newSymlink != null) {
+				try {
+					Files.deleteIfExists(newSymlink);
+				} catch (IOException e) {}
+			}
+			if (verbose) ioe.printStackTrace();
+			throw new IOException ("ERROR updating symlink '"+symlink+"'\n"+ioe.getMessage());
+		}
+	}
+	
 	private void delete() throws Exception{
 		p("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
@@ -299,16 +384,12 @@ public class GSync {
 				f.delete();
 			}
 		}
-		else if (debug) p("\nNo local files were found that have already been uploaded.");
 		localFileAlreadyUploaded.clear();
 	}
 
 
 	/**For unit testing.*/
-	public GSync () {
-		verbose = true;
-		debug = true;
-	}
+	public GSync () {}
 
 	private void upload() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
@@ -330,16 +411,14 @@ public class GSync {
 			if (deleteUploaded) {
 				for (File x: toDelete) {
 					x.delete();
-					if (debug  || verbose) p("\tDeleting "+x.getCanonicalPath());
+					if (verbose) p("\tDeleting "+x.getCanonicalPath());
 				}
 			}
 			else {
 				p("\nThese files can be safely deleted:");
-				for (File x: toDelete) p("rm -f "+x.getCanonicalPath());
+				for (File x: toDelete) p("\trm -f "+x.getCanonicalPath());
 			}
 		}
-		else if (debug) p("\nNo files to upload.");
-		
 		tm.shutdownNow();
 	}
 
@@ -395,13 +474,13 @@ public class GSync {
 	}
 
 	private void printResults() throws IOException {
-		p("\nGSync results...");
+		p("\nGSync status...");
 		
 		//local files, only process here if not deleting
 		if (deleteUploaded == false) {
 			if (localFileAlreadyUploaded.size() != 0) {
 				p("\nThe following local files have already been successfully uploaded to S3, have a correct placeholder, and are ready for deletion.");
-				for (File f: localFileAlreadyUploaded) p("rm -f "+f.getCanonicalPath());
+				for (File f: localFileAlreadyUploaded) p("\trm -f "+f.getCanonicalPath());
 			}
 			else if (verbose) p("\nNo local files were found that have already been uploaded.");
 		}
@@ -435,7 +514,7 @@ public class GSync {
 			//ready for upload
 			if (candidatesForUpload.size() !=0) {
 				if (dryRun) {
-					p("\nThe following local files are ready for upload to S3 and replacement with a placeholder file.");
+					p("\nThe following local files meet criteria and are ready for upload. Restart with the -r option.");
 					for (String f: candidatesForUpload.keySet()) p("\t/"+f);
 				}
 			}
@@ -473,7 +552,7 @@ public class GSync {
 
 	private void checkPlaceholders() throws IOException {
 		
-		p("\nChecking placeholder files...");
+		p("\nChecking placeholder files against S3 objects...");
 		for (Placeholder p: placeholders.values()) {
 			boolean ok = true;
 			boolean restoreType = false;
@@ -520,21 +599,11 @@ public class GSync {
 			}
 		}
 		
-		
-		//any failing paths?
+		//any failing placeholders?
 		if (failingPlaceholders.size() !=0) {
-			p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
+			p("\tIssues were identified when parsing the placeholder files, address and restart:\n");
 			for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
 			resultsCheckOK = false;
-		}
-		else if (verbose) {
-			p("\nNo problematic placeholder files were found.");
-			if (debug) {
-				if (placeholders.size() != 0) {
-					p("\tList of correct files:");
-					for (Placeholder p : placeholders.values()) p("\t"+p.getPlaceHolderFile().getCanonicalPath());
-				}
-			}
 		}
 	}
 
@@ -547,13 +616,11 @@ public class GSync {
 
 	private void scanBucket() throws IOException {
 		
-		p("\nScanning S3 bucket ("+ bucketName+ ")...");
+		p("\nScanning S3 bucket...");
 		
 		region = Util.getRegionFromCredentials();
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		
 		ListObjectsV2Result result;
-        if (debug) p("\tKey\tSize\tStorage");
         
         //must watch for truncated results
         do {
@@ -561,7 +628,6 @@ public class GSync {
 
             for (S3ObjectSummary os : result.getObjectSummaries()) {
             	String key = os.getKey();
-                if (debug) p("\t" + key+"\t"+os.getSize()+"\t"+os.getStorageClass());
 
             	//check candidatesForUpload
             	if (candidatesForUpload.containsKey(key)) {
@@ -594,7 +660,6 @@ public class GSync {
             		s3KeyWithNoLocal.add(key);
             	}
             }
-
             result.setContinuationToken(result.getNextContinuationToken());
         } while (result.isTruncated());
         
@@ -603,7 +668,7 @@ public class GSync {
 
 	/**Check the placeholders for issues.*/
 	private void parsePlaceholderFiles() throws IOException {
-		p("\nParsing local placeholder files...");
+		p("\nChecking local placeholder files...");
 		placeholders = new HashMap<String, Placeholder>();
 		for (File f: placeholderFiles) {
 			Placeholder p = new Placeholder(f);
@@ -630,27 +695,20 @@ public class GSync {
 		if (failingPlaceholders.size() !=0) {
 			//is it just key mismatches and they want to update them
 			if (failingPlaceholders.size() != keyPlaceholderToUpdate.size() || updateS3Keys == false) {
-				p("\tIssues were identified when parsing the placeholder files, address and restart.\n");
+				p("\tIssues were identified when parsing the placeholder files, address and restart:\n");
 				for (Placeholder ph: failingPlaceholders) p(ph.getMinimalInfo());
 			}
 			//otherwise don't print the error message
 			resultsCheckOK = false;
 		}
-		else p("\t"+placeholders.size()+" placeholder files");
+		else if (verbose) p("\t"+placeholders.size()+" passing placeholder files");
 	}
 
 	void scanLocalDir() throws IOException {
-		p("\nScanning local directory for candidate files to upload...");
-
+		p("\nScanning local directory...");
 		scanDirectory(localDir, fileExtensions);
-
-		p("\t"+candidatesForUpload.size()+" candidate upload files");
-		
-
+		if (verbose) p("\t"+candidatesForUpload.size()+" candidate files with indexes for upload");
 	}
-
-
-
 
 	/**Fetches all files with a given extension, min size, min age, not symbolic links. Also save any that are aws uploaded placeholder files and restore placeholder files.
 	 * Includes indexes for bam, cram, and tabix gz if present*/
@@ -669,14 +727,12 @@ public class GSync {
 					}
 				}
 				//symlink?
-				boolean symlink = Files.isSymbolicLink(list[i].toPath());	
-						
+				Path path = list[i].toPath();
+				boolean symlink = Files.isSymbolicLink(path);
+				if (updateSymlinks && symlink) updateSymlink(path);
+
 				if (match) {
-					if (debug) p("  Checking "+list[i].getCanonicalPath());
-					if (symlink) {
-						if (debug)p("   is a symlink");
-					}
-					else {
+					if (symlink == false) {
 						//size?
 						double size = Util.gigaBytes(list[i]);
 						if (size >= minGigaBytes) {
@@ -685,25 +741,20 @@ public class GSync {
 							int age = Util.ageOfFileInDays(list[i]);
 							if (age >= minDaysOld) {
 								candidatesForUpload.put(list[i].getCanonicalPath().substring(1), list[i].getCanonicalFile());
-								if (debug) p("   Adding "+list[i].getCanonicalPath());
-								
+								if (verbose) p("\tAdding upload candidate "+ list[i].getCanonicalFile());
 								//look for index file
 								File index = findIndex(list[i]);
 								if (index != null) {
 									candidatesForUpload.put(index.getCanonicalPath().substring(1), index.getCanonicalFile());
-									if (debug) p("   Adding "+ index.getCanonicalPath());
+									if (verbose) p("\tAdding upload candidate index"+ index.getCanonicalPath());
 								}
-								else if (debug) p("   No index file for "+list[i]);
 							}
-							else if (debug) p("   Too recent "+age+" days");
 						}
-						else if (debug) p("   Too small "+Util.formatNumber(size, 3)+" gb");
 					}
-
 				}
 				else if (fileName.contains(Placeholder.PLACEHOLDER_EXTENSION) && symlink == false) {
 					placeholderFiles.add(list[i].getCanonicalFile());
-					if (debug) p("  Placeholder "+ list[i].getCanonicalPath());
+					if (verbose) p("\tPlaceholder found "+ list[i].getCanonicalPath());
 				}
 			}
 		}
@@ -739,9 +790,9 @@ public class GSync {
 					case 'e': fileExtensions = Util.COMMA.split(args[++i]); break;
 					case 'r': dryRun = false; break;
 					case 'v': verbose = true; break;
+					case 's': updateSymlinks = true; break;
 					case 'u': updateS3Keys = true; break;
 					case 'k': deleteUploaded = true; break;
-					case 'x': debug = true; break;
 					case 'h': printDocs(); System.exit(0);
 					default: Util.printExit("\nProblem, unknown option! " + mat.group());
 					}
@@ -753,35 +804,34 @@ public class GSync {
 		}
 
 		//check params
-		if (localDir == null || localDir.canRead() == false || localDir.isFile()) p("\nError: please provide a directory to sync with S3\n");
-		//if (baseS3Url == null) p("\nError: please provide a root S3 URL containing a bucket in which to sync with your local directory\n");
-		//if (awsCredentials == null) p("\nError: please provide a path to your aws credentials file\n");
+		if (localDir == null || localDir.canRead() == false || localDir.isFile()) e("\nError: please provide a directory to sync with S3\n");
+		if (bucketName == null) e("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
 
 		localDir = localDir.getCanonicalFile();
 
 		if (dryRun) deleteUploaded = false;
-		if (debug) verbose = true;
 		
 		printOptions();
 	}	
 
 	private void printOptions() {
 		p("Options:");
-		p("  -d Local directory  : "+ localDir);
-		p("  -b S3 Bucket name   : "+ bucketName);
-		p("  -e File extensions  : "+ Util.stringArrayToString(fileExtensions, ","));
-		p("  -a Min file days    : "+ minDaysOld);
-		p("  -g Min file GB      : "+ minGigaBytes);
-		p("  -r Dry run          : "+ dryRun);
-		p("  -u Update S3 keys   : "+ updateS3Keys);
-		p("  -v Verbose output   : "+ verbose);
-		p("  -k Delete uploaded files : "+ deleteUploaded);
+		p("  -d Local directory           : "+ localDir);
+		p("  -b S3 Bucket name            : "+ bucketName);
+		p("  -e File extensions           : "+ Util.stringArrayToString(fileExtensions, ","));
+		p("  -a Min file days             : "+ minDaysOld);
+		p("  -g Min file GB               : "+ minGigaBytes);
+		p("  -r Dry run                   : "+ dryRun);
+		p("  -s Update symlinks           : "+ updateSymlinks);
+		p("  -u Update S3 keys            : "+ updateS3Keys);
+		p("  -v Verbose output            : "+ verbose);
+		p("  -k Delete local after upload : "+ deleteUploaded);
 	}
 
 	public static void printDocs(){
 		p("\n" +
 				"**************************************************************************************\n" +
-				"**                                 GSync : July 2019                                **\n" +
+				"**                                  GSync : August 2019                             **\n" +
 				"**************************************************************************************\n" +
 				"GSync pushes files with a particular extention that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
@@ -806,12 +856,13 @@ public class GSync {
 				"   aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
 				"   region = us-west-2\n"+
 				"4) Execute GSync to upload large old files to S3 and replace them with a placeholder\n"+
-				"   named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
+				"   file named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"5) To download and restore an archived file, rename the placeholder xxx."+Placeholder.RESTORE_PLACEHOLDER_EXTENSION+"\n"+
 				"   and run GSync.\n"+
 				"6) To delete an archived file, it's placeholder, and any local files, rename the \n"+
 				"   placeholder xxx."+Placeholder.DELETE_PLACEHOLDER_EXTENSION+" and run GSync.\n"+
 				"   Versioned copies on S3 will not be deleted. Use the S3 Console to do so.\n"+
+				"7) Placeholder files may be moved, see -u; broken symlinks can be updated, see -s\n"+
 				
 				"\nRequired:\n"+
 				"-d Path to a local directory to sync\n"+
@@ -823,11 +874,11 @@ public class GSync {
 				"-a Minimum days old for archiving, defaults to 60\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
-				"-k Delete local files that were sucessfully uploaded, defaults to just printing\n"+
-				"     'rm -r xxx' statements. Use with caution!\n"+
-				"-u Update S3 Object keys to match current placholder paths. Defaults to reporting\n"+
-				"     issues.  Only use if placeholders have been moved.\n"+
-				"-v Verbose output. Use -x for very verbose output.\n"+
+				"-k Delete local files that were sucessfully uploaded\n"+
+				"-u Update S3 Object keys to match current placholder paths.\n"+
+				"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
+				"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
+				"-v Verbose output\n"+
 
 				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d /Repo/ -b hcibioinfo_gsync_repo \n"+
 				"     -v -a 90 -g 1 \n\n"+
@@ -910,11 +961,6 @@ public class GSync {
 		this.verbose = verbose;
 	}
 
-
-	public void setDebug(boolean debug) {
-		this.debug = debug;
-	}
-
 	public ArrayList<Placeholder> getFailingPlaceholders() {
 		return failingPlaceholders;
 	}
@@ -922,5 +968,10 @@ public class GSync {
 
 	public void setUpdateS3Keys(boolean updateS3Keys) {
 		this.updateS3Keys = updateS3Keys;
+	}
+
+
+	public void setUpdateSymlinks(boolean updateSymlinks) {
+		this.updateSymlinks = updateSymlinks;
 	}
 }
