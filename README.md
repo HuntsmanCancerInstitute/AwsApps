@@ -2,16 +2,18 @@
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app.
 <pre>
 **************************************************************************************
-**                                 GSync : July 2019                                **
+**                                  GSync : August 2019                             **
 **************************************************************************************
-GSync pushes files with a particular extention that exceed a given size and age to 
+GSync pushes files with a particular extension that exceed a given size and age to 
 Amazon's S3 object store. Associated genomic index files are also moved. Once 
 correctly uploaded, GSync replaces the original file with a local txt placeholder file 
-containing information about the S3 object. Symbolic links are ignored.
+containing information about the S3 object. Files are restored or deleted by modifying
+the name of the placeholder file. Symbolic links are ignored.
 
 WARNING! This app has the potential to destroy precious genomic data. TEST IT on a
-pilot system before depolying in production. BACKUP your local files and ENABLE S3
-Object Versioning before running.
+pilot system before deploying in production. BACKUP your local files and ENABLE S3
+Object Versioning before running.  This app is provided with no guarantee of proper
+function.
 
 To use the app:
 1) Create a new S3 bucket dedicated solely to this purpose. Use it for nothing else.
@@ -24,6 +26,15 @@ To use the app:
    aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A
    aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
    region = us-west-2
+4) Execute GSync to upload large old files to S3 and replace them with a placeholder
+   file named xxx.ArchiveInfo.txt
+5) To download and restore an archived file, rename the placeholder 
+   xxx.ArchiveInfo.txt.restore
+   and run GSync.
+6) To delete an archived file, it's placeholder, and any local files, rename the 
+   placeholder xxx.ArchiveInfo.txt.delete and run GSync.
+   Versioned copies on S3 will not be deleted. Use the S3 Console to do so.
+7) Placeholder files may be moved, see -u; broken symlinks can be updated, see -s
 
 Required:
 -d Path to a local directory to sync
@@ -35,8 +46,10 @@ Optional:
 -a Minimum days old for archiving, defaults to 60
 -g Minimum gigabyte size for archiving, defaults to 5
 -r Perform a real run, defaults to just listing the actions that would be taken
--k Delete local files that were sucessfully uploaded, defaults to just printing
-     'rm -r xxx' statements. Use with caution!
+-k Delete local files that were successfully  uploaded.
+-u Update S3 Object keys to match current placeholder paths.
+-s Update symbolic links that point to uploaded and deleted files. This replaces the
+     broken link with a new link named xxx.ArchiveInfo.txt
 -v Verbose output
 
 Example: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d /Repo/ -b hcibioinfo_gsync_repo 
