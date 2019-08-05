@@ -23,3 +23,22 @@ aws s3 rm s3://hcibioinfo-gsync-test --recursive
 # Run GSync
 ## dry run:  -d ~/Code/AwsApps/TestData/GSync -b hcibioinfo-gsync-test -g 0.0005 -x
 ## real upload and deletion of local files: -d ~/Code/AwsApps/TestData/GSync -b hcibioinfo-gsync-test -g 0.0005 -r -k
+
+
+### Setting up a AbortIncompleteMultipartUpload lifecycle rule on a bucket
+# Create this lcc.json file:
+{
+    "Rules": [
+        {
+            "ID": "AbortIncompleteMultipartUpload",
+            "Status": "Enabled",
+            "Prefix": "",
+            "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 3
+            }
+        }
+    ]
+}
+
+# Attache the lcc to the bucket
+aws s3api put-bucket-lifecycle --bucket hcibioinfo-gsync-test --lifecycle-configuration file://lcc.json

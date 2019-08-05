@@ -324,7 +324,7 @@ public class GSync {
 	}
 	
 	private String restore() {
-		p("\nRestoring S3 Objects and renaming their restore placeholders to standard...");
+		p("\nRestoring "+restorePlaceholders.size()+" S3 Objects and renaming their restore placeholders to standard...");
 		FileOutputStream fos = null;
 		S3ObjectInputStream s3is = null;
 		File localFile = null;
@@ -332,7 +332,7 @@ public class GSync {
 		try {
 			for (Placeholder p : restorePlaceholders) {
 				String key = p.getAttribute("key");
-				if (verbose) p("\t"+key+"\t"+p.getPlaceHolderFile());
+				p("\t"+key+"\t"+p.getPlaceHolderFile());
 
 				//download object
 				S3Object o = s3.getObject(bucketName, key);
@@ -376,7 +376,6 @@ public class GSync {
 
 
 	private void deleteAlreadyUploaded() throws IOException {
-
 		if (localFileAlreadyUploaded.size() != 0) {
 			p("\nThe following local files have already been successfully uploaded to S3, have a correct placeholder, and are now deleted.");
 			for (File f: localFileAlreadyUploaded) {
@@ -456,7 +455,7 @@ public class GSync {
 	private String upload(File file, TransferManager tm) throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
 		p("\t"+bucketName+file.getCanonicalPath());
 		Upload u = tm.upload(bucketName, file.getCanonicalPath().substring(1), file);
-//Util.showTransferProgress(u);
+		//Util.showTransferProgress(u);
 	    if (Util.waitForCompletion(u) == false) throw new IOException("Failed S3 upload "+file);
 	    return u.waitForUploadResult().getETag();
 	}
@@ -746,7 +745,7 @@ public class GSync {
 								File index = findIndex(list[i]);
 								if (index != null) {
 									candidatesForUpload.put(index.getCanonicalPath().substring(1), index.getCanonicalFile());
-									if (verbose) p("\tAdding upload candidate index"+ index.getCanonicalPath());
+									if (verbose) p("\tAdding upload candidate index "+ index.getCanonicalPath());
 								}
 							}
 						}
@@ -760,8 +759,6 @@ public class GSync {
 		}
 	}
 
-
-
 	public static void main(String[] args) {
 		if (args.length ==0){
 			printDocs();
@@ -769,7 +766,6 @@ public class GSync {
 		}
 		new GSync(args);
 	}	
-
 
 	/**This method will process each argument and assign new variables
 	 * @throws IOException */
@@ -874,7 +870,7 @@ public class GSync {
 				"-a Minimum days old for archiving, defaults to 60\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
-				"-k Delete local files that were sucessfully uploaded\n"+
+				"-k Delete local files that were sucessfully uploaded.\n"+
 				"-u Update S3 Object keys to match current placholder paths.\n"+
 				"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
 				"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
