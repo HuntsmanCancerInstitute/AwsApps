@@ -40,6 +40,10 @@ public class Placeholder {
 	public static final String TYPE_RESTORE = "RESTORE";
 	public static final String TYPE_DELETE = "DELETE";
 	
+	/*STANDARD or null, DEEP_ARCHIVE, GLACIER
+	 * Only the first can be downloaded directly.*/
+	private String storageClass = "";
+	
 	public Placeholder() {};
 	
 	public Placeholder(File f) throws IOException {
@@ -77,6 +81,7 @@ public class Placeholder {
 	public String getMinimalInfo() throws IOException {
 		StringBuilder sb = new StringBuilder();
 		sb.append("\tlocalPlaceholderFile = "+placeHolderFile+"\n");
+		sb.append("\tstorageClass = "+storageClass+"\n");
 		sb.append("\ttype = "+type);
 		for (String key : attributes.keySet()) {
 			sb.append("\n\t");
@@ -168,5 +173,14 @@ public class Placeholder {
 	public void addErrorMessage(String message) {
 		if (errorMessages == null) errorMessages = new ArrayList<String>();
 		errorMessages.add(message);
+	}
+
+	public void setStorageClass(String storageClass) {
+		this.storageClass = storageClass;
+		
+	}
+
+	public String getStorageClass() {
+		return storageClass;
 	}
 }

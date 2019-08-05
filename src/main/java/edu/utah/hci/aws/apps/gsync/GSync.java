@@ -18,6 +18,7 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.CopyObjectResult;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
@@ -314,7 +315,7 @@ public class GSync {
 		p("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		for (Placeholder p : deletePlaceholders) {
-			if (verbose) p("\t"+p.getAttribute("key")+"\t"+p.getPlaceHolderFile()+"\t"+p.getLocalFile());
+			p("\t"+p.getAttribute("key")+"\t"+p.getPlaceHolderFile()+"\t"+p.getLocalFile()+"\t"+p.getStorageClass());
 			s3.deleteObject(bucketName, p.getAttribute("key"));
 			p.getPlaceHolderFile().delete();
 			if (p.getLocalFile() != null) p.getLocalFile().delete();
@@ -329,48 +330,57 @@ public class GSync {
 		S3ObjectInputStream s3is = null;
 		File localFile = null;
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		int numRestored = 0;
 		try {
 			for (Placeholder p : restorePlaceholders) {
 				String key = p.getAttribute("key");
-				p("\t"+key+"\t"+p.getPlaceHolderFile());
+				p("\t"+key+"\t"+p.getPlaceHolderFile()+"\t"+p.getStorageClass());
 
-				//download object
-				S3Object o = s3.getObject(bucketName, key);
-				s3is = o.getObjectContent();
-				localFile = p.getLocalFile();
-				fos = new FileOutputStream(localFile);
-				byte[] read_buf = new byte[1024];
-				int read_len = 0;
-				while ((read_len = s3is.read(read_buf)) > 0) fos.write(read_buf, 0, read_len);
-				s3is.close();
-				fos.close();
-				
-				//check the size
-				long placeholderSize = Long.parseLong(p.getAttribute("size"));
-				if (placeholderSize != localFile.length()) throw new IOException("The restored file's size ("+localFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
-				
-				//rename the placeholder file
-				File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
-				p.getPlaceHolderFile().renameTo(stdPlaceholder);
-				
+				//check storage class, for now just skip these, should trigger a pull from archive to S3.
+				if (p.getStorageClass().equals("STANDARD") == false) {
+//add trigger code here!
+					p("\tWARNING: skipping restore, use the AWS console to pull object from archive to S3, then re run GSync.\n");
+				}
+
+				else {
+					//download object
+					S3Object o = s3.getObject(bucketName, key);
+					s3is = o.getObjectContent();
+					localFile = p.getLocalFile();
+					fos = new FileOutputStream(localFile);
+					byte[] read_buf = new byte[1024];
+					int read_len = 0;
+					while ((read_len = s3is.read(read_buf)) > 0) fos.write(read_buf, 0, read_len);
+					s3is.close();
+					fos.close();
+
+					//check the size
+					long placeholderSize = Long.parseLong(p.getAttribute("size"));
+					if (placeholderSize != localFile.length()) throw new IOException("The restored file's size ("+localFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
+
+					//rename the placeholder file
+					File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
+					p.getPlaceHolderFile().renameTo(stdPlaceholder);
+					numRestored++;
+				}
 			}
 		} catch (Exception e) {
 			//delete the local
 			if (localFile != null) localFile.delete();
-			
+
 			//close the IO
 			try {
 				if (s3is != null)s3is.close();
 				if (fos != null)fos.close();
 				s3.shutdown();
 			} catch (IOException ex) {}
-			
+
 			//return the error
 			if (verbose) e.printStackTrace();
 			return "\nRESTORE ERROR: "+e.getMessage();
 		} 
 		s3.shutdown();
-		p("\t"+restorePlaceholders.size()+" resources restored");
+		p("\t"+numRestored+" resources restored");
 		return "";
 	}
 
@@ -645,6 +655,8 @@ public class GSync {
             		//OK, a local placeholder file contains the aws key
             		Placeholder p = placeholders.get(key);
             		p.setFoundInS3(true);
+            		//Set storage class STANDARD, DEEP_ARCHIVE, GLACIER
+            		p.setStorageClass(os.getStorageClass());
             		//check size
             		String size = p.getAttribute("size");
             		if (Long.parseLong(size) == os.getSize()) p.setS3SizeMatches(true);
@@ -829,15 +841,15 @@ public class GSync {
 				"**************************************************************************************\n" +
 				"**                                  GSync : August 2019                             **\n" +
 				"**************************************************************************************\n" +
-				"GSync pushes files with a particular extention that exceed a given size and age to \n" +
+				"GSync pushes files with a particular extension that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
 				"correctly uploaded, GSync replaces the original file with a local txt placeholder file \n"+
 				"containing information about the S3 object. Files are restored or deleted by modifying\n"+
 				"the name of the placeholder file. Symbolic links are ignored.\n"+
 				
 				"\nWARNING! This app has the potential to destroy precious genomic data. TEST IT on a\n"+
-				"pilot system before depolying in production. BACKUP your local files and ENABLE S3\n"+
-				"Object Versioning before running.  This app is provided with no guarrentee of proper\n"+
+				"pilot system before deploying in production. BACKUP your local files and ENABLE S3\n"+
+				"Object Versioning before running.  This app is provided with no guarantee of proper\n"+
 				"function.\n"+
 				
 				"\nTo use the app:\n"+ 
@@ -870,8 +882,8 @@ public class GSync {
 				"-a Minimum days old for archiving, defaults to 60\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
-				"-k Delete local files that were sucessfully uploaded.\n"+
-				"-u Update S3 Object keys to match current placholder paths.\n"+
+				"-k Delete local files that were successfully  uploaded.\n"+
+				"-u Update S3 Object keys to match current placeholder paths.\n"+
 				"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
 				"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"-v Verbose output\n"+
