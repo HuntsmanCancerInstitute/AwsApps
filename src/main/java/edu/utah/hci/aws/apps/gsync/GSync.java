@@ -1,29 +1,27 @@
 package edu.utah.hci.aws.apps.gsync;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.CopyObjectResult;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.ObjectMetadata;
+import com.amazonaws.services.s3.model.RestoreObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.SdkClientException;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
@@ -52,9 +50,10 @@ public class GSync {
 	private boolean verbose = false;
 	private boolean deleteUploaded = false;
 	private boolean updateS3Keys = false;
-	private boolean updateSymlinks = false;
+	//private boolean updateSymlinks = false;
 
 	//internal fields
+	private String deleteFromKey = null;
 	private HashMap<String, File> candidatesForUpload = new HashMap<String, File>();
 	
 	private ArrayList<File> placeholderFiles = new ArrayList<File>();
@@ -64,6 +63,7 @@ public class GSync {
 	
 	private String region = null;
 	private boolean resultsCheckOK = true;
+	private static final int DAYS_IN_S3 = 7;
 
 	//uploads
 	private ArrayList<File> localFileAlreadyUploaded = new ArrayList<File>();
@@ -80,7 +80,7 @@ public class GSync {
 	public GSync (String[] args){
 		try {
 			long startTime = System.currentTimeMillis();
-
+			
 			processArgs(args);
 
 			doWork();
@@ -152,8 +152,8 @@ public class GSync {
 		//make hash of destination keys and clear error messages
 		HashSet<String> destinationKeys = new HashSet<String>();
 		for (Placeholder p: keyPlaceholderToUpdate.values()) {
-			String cp = p.getPlaceHolderFile().getCanonicalPath();
-			String newKey = Placeholder.PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("").substring(1);
+			String cp = p.getPlaceHolderFile().getCanonicalPath().replaceFirst(deleteFromKey, "");
+			String newKey = Placeholder.PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("");			
 			destinationKeys.add(newKey);
 		}
 		ArrayList<String> destinationKeysAlreadyExisting = new ArrayList<String>(); 
@@ -202,8 +202,8 @@ public class GSync {
 				for (Placeholder ph: keyPlaceholderToUpdate.values()) {
 					working = ph;
 					String currKey = working.getAttribute("key");
-					String destKey = Placeholder.PLACEHOLDER_PATTERN.matcher(ph.getPlaceHolderFile().getCanonicalPath()).replaceFirst("").substring(1);
-					
+					String temp = ph.getPlaceHolderFile().getCanonicalPath().replaceFirst(deleteFromKey, "");
+					String destKey = Placeholder.PLACEHOLDER_PATTERN.matcher(temp).replaceFirst("");
 					
 					sum = "\t"+currKey+" -> "+destKey+" updating "+working.getPlaceHolderFile();
 					if (verbose) p(sum);
@@ -227,9 +227,14 @@ public class GSync {
 		return error;
 	}
 
-	/**Assumes the Path is a symlink,  if broken, looks for the associated placeholder file,
+	/*Assumes the Path is a symlink,  if broken, looks for the associated placeholder file,
 	 * if present, creates a new symlink pointed at the placeholder and deletes the original symlink.
-	 * Only works with full paths, not relative paths.*/
+	 * Only works with full paths, not relative paths.
+	 * 
+	 * 
+	 * Causing major problems! disable for now.
+	 * 
+	 * 
 	public void updateSymlink(Path symlink) throws IOException {
 
 		Path newSymlink = null;	
@@ -272,7 +277,7 @@ public class GSync {
 			}
 			//symlink not a placeholder
 			else {		
-				//look for a placeholder xxx.ArchiveInfo.txt
+				//look for a placeholder xxx.S3.txt
 				Path target = Files.readSymbolicLink(symlink);
 				Path archivedTarget = Paths.get(target.toString()+Placeholder.PLACEHOLDER_EXTENSION);
 				if (Files.exists(archivedTarget)) {
@@ -309,7 +314,7 @@ public class GSync {
 			if (verbose) ioe.printStackTrace();
 			throw new IOException ("ERROR updating symlink '"+symlink+"'\n"+ioe.getMessage());
 		}
-	}
+	}*/
 	
 	private void delete() throws Exception{
 		p("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
@@ -329,6 +334,7 @@ public class GSync {
 		FileOutputStream fos = null;
 		S3ObjectInputStream s3is = null;
 		File localFile = null;
+		File tempFile = null;
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		int numRestored = 0;
 		try {
@@ -336,18 +342,17 @@ public class GSync {
 				String key = p.getAttribute("key");
 				p("\t"+key+"\t"+p.getPlaceHolderFile()+"\t"+p.getStorageClass());
 
-				//check storage class, for now just skip these, should trigger a pull from archive to S3.
-				if (p.getStorageClass().equals("STANDARD") == false) {
-//add trigger code here!
-					p("\tWARNING: skipping restore, use the AWS console to pull object from archive to S3, then re run GSync.\n");
-				}
+				//check storage class, may need to trigger a pull from glacier to S3.
+				boolean download = true;
+				if (p.getStorageClass().equals("STANDARD") == false) download = requestArchiveRestore(key, s3);
 
-				else {
-					//download object
+				//good to go?
+				if (download) {
 					S3Object o = s3.getObject(bucketName, key);
 					s3is = o.getObjectContent();
 					localFile = p.getLocalFile();
-					fos = new FileOutputStream(localFile);
+					tempFile = new File(localFile.getParentFile(), "tempRestore_"+localFile.getName());
+					fos = new FileOutputStream(tempFile);
 					byte[] read_buf = new byte[1024];
 					int read_len = 0;
 					while ((read_len = s3is.read(read_buf)) > 0) fos.write(read_buf, 0, read_len);
@@ -356,17 +361,22 @@ public class GSync {
 
 					//check the size
 					long placeholderSize = Long.parseLong(p.getAttribute("size"));
-					if (placeholderSize != localFile.length()) throw new IOException("The restored file's size ("+localFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
+					if (placeholderSize != tempFile.length()) throw new IOException("The restored file's size ("+tempFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
 
+					//rename the temp to local
+					tempFile.renameTo(localFile);
+					
 					//rename the placeholder file
 					File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
 					p.getPlaceHolderFile().renameTo(stdPlaceholder);
 					numRestored++;
+					
 				}
 			}
 		} catch (Exception e) {
-			//delete the local
+			//delete the temp and local
 			if (localFile != null) localFile.delete();
+			if (tempFile != null) tempFile.delete();
 
 			//close the IO
 			try {
@@ -377,12 +387,32 @@ public class GSync {
 
 			//return the error
 			if (verbose) e.printStackTrace();
-			return "\nRESTORE ERROR: "+e.getMessage();
+			String m = e.getMessage();
+			if (m.contains("SSL peer shut down incorrectly")) m = "AWS rejected download request, try again later. AWS message '"+m+"'";
+			return "\nRESTORE ERROR: "+m;
 		} 
 		s3.shutdown();
 		p("\t"+numRestored+" resources restored");
 		return "";
 	}
+	
+	public boolean requestArchiveRestore(String key, AmazonS3 s3Client) throws IOException {
+			//check if restore in progress
+		ObjectMetadata response = s3Client.getObjectMetadata(bucketName, key);
+        Boolean restoreFlag = response.getOngoingRestore();
+        //request never received
+        if (restoreFlag == null) {
+        	p("\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours to download.");
+            // Create and submit a request to restore an object from Glacier to S3 for xxx days.
+           RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, DAYS_IN_S3);
+           s3Client.restoreObjectV2(requestRestore);
+        }
+        //true, in progress
+        else if (restoreFlag == true) p("\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours to download.");
+        //false, ready for download
+        else return true;
+        return false;
+    }
 
 
 	private void deleteAlreadyUploaded() throws IOException {
@@ -406,21 +436,25 @@ public class GSync {
 		
 		//anything to upload?  all of these methods throw an IOException 
 		if (candidatesForUpload.size() !=0) {
-			p("\nUploading "+candidatesForUpload.size()+ " files...");
+			int numUpload = candidatesForUpload.size();
+			p("\nUploading "+numUpload+ " files...");
 			ArrayList<File> toDelete = new ArrayList<File>();
-			for (String f: candidatesForUpload.keySet()) {
-				File toUpload = candidatesForUpload.get(f);
-				String etagData = upload(toUpload, tm);
+			int counter = 1;
+			
+			for (String key: candidatesForUpload.keySet()) {
+				File toUpload = candidatesForUpload.get(key);
+				String etagData = upload(key, toUpload, tm, counter+"/"+numUpload);
 				toDelete.add(toUpload);
 				writePlaceholder(toUpload, etagData);
+				counter++;
 			}
 			//cannot reach this point if there was an error
 			p("\tAll S3 uploads successfully completed.");
 			//delete
 			if (deleteUploaded) {
 				for (File x: toDelete) {
-					x.delete();
 					if (verbose) p("\tDeleting "+x.getCanonicalPath());
+					x.delete();
 				}
 			}
 			else {
@@ -432,9 +466,14 @@ public class GSync {
 	}
 
 	private void writePlaceholder(File f, String etag) throws IOException {
+		Placeholder placeholder = new Placeholder();
+		HashMap<String, String> att = placeholder.getAttributes();
+		att.put("bucket", bucketName);
+		att.put("key", f.getCanonicalPath().replaceFirst(deleteFromKey, ""));
+		att.put("etag", etag);
+		att.put("size", new Long(f.length()).toString());
 		File p = new File(f.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
-		String[] attributes = new String[] {"bucket = "+bucketName, "key = "+ f.getCanonicalPath().substring(1), "etag = "+etag, "size = "+f.length()};
-		Util.write(attributes, p);
+		placeholder.writePlaceholder(p);
 	}
 
 	/**Looks for files with bam, cram, and gz and their indexes bai, crai, tbi.
@@ -462,23 +501,30 @@ public class GSync {
 		
 	}
 
-	private String upload(File file, TransferManager tm) throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
-		p("\t"+bucketName+file.getCanonicalPath());
-		Upload u = tm.upload(bucketName, file.getCanonicalPath().substring(1), file);
+	private String upload(String key, File file, TransferManager tm, String prePend) throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
+		long startTime = System.currentTimeMillis();
+		
+		System.out.print("\t"+prePend+"\t"+bucketName+"/"+key+"\t");
+		Upload u = tm.upload(bucketName, key, file);
 		//Util.showTransferProgress(u);
 	    if (Util.waitForCompletion(u) == false) throw new IOException("Failed S3 upload "+file);
+	    
+	    //calc time
+	    double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
+		p(Util.formatNumber(diffTime, 1)+" min");
+		
 	    return u.waitForUploadResult().getETag();
 	}
 	
 	private void removeLocalFromUploadCandidates() throws IOException {
 		// remove localFileAlreadyUploaded from candidatesForUpload
-		for (File f: localFileAlreadyUploaded) candidatesForUpload.remove(f.getCanonicalPath().substring(1));
+		for (File f: localFileAlreadyUploaded) candidatesForUpload.remove(f.getCanonicalPath().replaceFirst(deleteFromKey, ""));
 		
 		// remove localFileAlreadyUploadedButDiffSizeEtag from candidatesForUpload
-		for (File f: localFileAlreadyUploadedButDiffSize) candidatesForUpload.remove(f.getCanonicalPath().substring(1));
+		for (File f: localFileAlreadyUploadedButDiffSize) candidatesForUpload.remove(f.getCanonicalPath().replaceFirst(deleteFromKey, ""));
 		
 		// remove localFileAlreadyUploadedNoPlaceholder from candidatesForUpload
-		for (File f: localFileAlreadyUploadedNoPlaceholder) candidatesForUpload.remove(f.getCanonicalPath().substring(1));
+		for (File f: localFileAlreadyUploadedNoPlaceholder) candidatesForUpload.remove(f.getCanonicalPath().replaceFirst(deleteFromKey, ""));
 		
 	}
 
@@ -568,7 +614,7 @@ public class GSync {
 			boolean deleteType = false;
 
 			//create the local file, it may or may not exist
-			File local = new File("/"+p.getAttribute("key")).getCanonicalFile();
+			File local = new File(deleteFromKey+p.getAttribute("key")).getCanonicalFile();		
 			p.setLocalFile(local);
 			
 			//found in S3
@@ -649,7 +695,7 @@ public class GSync {
             		}
             		else localFileAlreadyUploadedButDiffSize.add(candidatesForUpload.get(key));
             	}
-            	
+
             	//check placeholders
             	if (placeholders.containsKey(key)) {
             		//OK, a local placeholder file contains the aws key
@@ -682,7 +728,7 @@ public class GSync {
 		p("\nChecking local placeholder files...");
 		placeholders = new HashMap<String, Placeholder>();
 		for (File f: placeholderFiles) {
-			Placeholder p = new Placeholder(f);
+			Placeholder p = new Placeholder(f,deleteFromKey);
 			String key = p.getAttribute("key");
 			
 			//does the path match the key?
@@ -690,7 +736,7 @@ public class GSync {
 				
 				//duplicate placeholders?
 				if (placeholders.containsKey(key)) {
-					p.addErrorMessage("Multiple placeholder files found with the same key. Can only have one std, restore, or delete placeholder at a time." );
+					p.addErrorMessage("Multiple placeholder files found with the same key '"+key+"'. Can only have one std, restore, or delete placeholder at a time." );
 					failingPlaceholders.add(p);
 				}
 				else placeholders.put(key, p);
@@ -724,6 +770,9 @@ public class GSync {
 	/**Fetches all files with a given extension, min size, min age, not symbolic links. Also save any that are aws uploaded placeholder files and restore placeholder files.
 	 * Includes indexes for bam, cram, and tabix gz if present*/
 	private void scanDirectory (File directory, String[] fileExtensions) throws IOException{ 
+		//is the dir symlinked?
+		if (Files.isSymbolicLink(directory.toPath())) return;
+		
 		File[] list = directory.listFiles();
 		for (int i=0; i< list.length; i++){
 			if (list[i].isDirectory()) scanDirectory (list[i], fileExtensions);
@@ -740,7 +789,9 @@ public class GSync {
 				//symlink?
 				Path path = list[i].toPath();
 				boolean symlink = Files.isSymbolicLink(path);
-				if (updateSymlinks && symlink) updateSymlink(path);
+				
+				//don't proc for now, major issues
+				//if (updateSymlinks && symlink) updateSymlink(path);
 
 				if (match) {
 					if (symlink == false) {
@@ -751,12 +802,12 @@ public class GSync {
 							//age in days?
 							int age = Util.ageOfFileInDays(list[i]);
 							if (age >= minDaysOld) {
-								candidatesForUpload.put(list[i].getCanonicalPath().substring(1), list[i].getCanonicalFile());
+								candidatesForUpload.put(list[i].getCanonicalPath().replaceFirst(deleteFromKey, ""), list[i].getCanonicalFile());
 								if (verbose) p("\tAdding upload candidate "+ list[i].getCanonicalFile());
 								//look for index file
 								File index = findIndex(list[i]);
 								if (index != null) {
-									candidatesForUpload.put(index.getCanonicalPath().substring(1), index.getCanonicalFile());
+									candidatesForUpload.put(index.getCanonicalPath().replaceFirst(deleteFromKey, ""), index.getCanonicalFile());
 									if (verbose) p("\tAdding upload candidate index "+ index.getCanonicalPath());
 								}
 							}
@@ -798,7 +849,7 @@ public class GSync {
 					case 'e': fileExtensions = Util.COMMA.split(args[++i]); break;
 					case 'r': dryRun = false; break;
 					case 'v': verbose = true; break;
-					case 's': updateSymlinks = true; break;
+					//case 's': updateSymlinks = true; break;
 					case 'u': updateS3Keys = true; break;
 					case 'k': deleteUploaded = true; break;
 					case 'h': printDocs(); System.exit(0);
@@ -816,6 +867,7 @@ public class GSync {
 		if (bucketName == null) e("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
 
 		localDir = localDir.getCanonicalFile();
+		deleteFromKey = localDir.getParentFile().getCanonicalPath()+"/";
 
 		if (dryRun) deleteUploaded = false;
 		
@@ -830,7 +882,7 @@ public class GSync {
 		p("  -a Min file days             : "+ minDaysOld);
 		p("  -g Min file GB               : "+ minGigaBytes);
 		p("  -r Dry run                   : "+ dryRun);
-		p("  -s Update symlinks           : "+ updateSymlinks);
+		//p("  -s Update symlinks           : "+ updateSymlinks);
 		p("  -u Update S3 keys            : "+ updateS3Keys);
 		p("  -v Verbose output            : "+ verbose);
 		p("  -k Delete local after upload : "+ deleteUploaded);
@@ -865,15 +917,16 @@ public class GSync {
 				"   region = us-west-2\n"+
 				"4) Execute GSync to upload large old files to S3 and replace them with a placeholder\n"+
 				"   file named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
-				"5) To download and restore an archived file, rename the placeholder xxx."+Placeholder.RESTORE_PLACEHOLDER_EXTENSION+"\n"+
-				"   and run GSync.\n"+
-				"6) To delete an archived file, it's placeholder, and any local files, rename the \n"+
-				"   placeholder xxx."+Placeholder.DELETE_PLACEHOLDER_EXTENSION+" and run GSync.\n"+
+				"5) To download and restore an archived file, rename the placeholder\n"+
+				"   xxx"+Placeholder.RESTORE_PLACEHOLDER_EXTENSION+ " and run GSync.\n"+
+				"6) To delete an S3 archived file, it's placeholder, and any local files, rename the \n"+
+				"   placeholder xxx"+Placeholder.DELETE_PLACEHOLDER_EXTENSION+" and run GSync.\n"+
 				"   Versioned copies on S3 will not be deleted. Use the S3 Console to do so.\n"+
-				"7) Placeholder files may be moved, see -u; broken symlinks can be updated, see -s\n"+
+				"7) Placeholder files may be moved, see -u\n"+ //; broken symlinks can be updated, see -s\n"+
 				
 				"\nRequired:\n"+
-				"-d Path to a local directory to sync\n"+
+				"-d Path to a local directory to sync. This becomes the base key in S3, e.g. \n"+
+				"     BucketName/LocalDirName/...\n"+
 				"-b Dediated S3 bucket name\n"+
 
 				"\nOptional:\n" +
@@ -884,19 +937,20 @@ public class GSync {
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
 				"-k Delete local files that were successfully  uploaded.\n"+
 				"-u Update S3 Object keys to match current placeholder paths.\n"+
-				"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
-				"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
+				//"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
+				//"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"-v Verbose output\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d /Repo/ -b hcibioinfo_gsync_repo \n"+
+				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d Repo/ -b hcibioinfo_gsync_repo \n"+
 				"     -v -a 90 -g 1 \n\n"+
 
 				"**************************************************************************************\n");
 
 	}
 
-	public void setLocalDir(File localDir) {
+	public void setLocalDir(File localDir) throws IOException {
 		this.localDir = localDir;
+		deleteFromKey = localDir.getParentFile().getCanonicalPath()+"/";
 	}
 
 	public HashMap<String, File> getCandidatesForUpload() {
@@ -979,7 +1033,7 @@ public class GSync {
 	}
 
 
-	public void setUpdateSymlinks(boolean updateSymlinks) {
-		this.updateSymlinks = updateSymlinks;
-	}
+	//public void setUpdateSymlinks(boolean updateSymlinks) {
+	//	this.updateSymlinks = updateSymlinks;
+	//}
 }

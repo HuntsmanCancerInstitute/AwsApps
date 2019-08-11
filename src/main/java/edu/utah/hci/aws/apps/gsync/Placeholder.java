@@ -28,15 +28,15 @@ public class Placeholder {
 	private boolean s3SizeMatches = false;
 	private boolean s3EtagMatches = false;
 	public static final String[] requiredKeys = {"bucket", "key", "size", "etag"};
-	public static final String PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt"; //don't change this
-	public static final String RESTORE_PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt.restore"; //don't change this
-	public static final String DELETE_PLACEHOLDER_EXTENSION = ".ArchiveInfo.txt.delete"; //don't change this
-	public static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\.ArchiveInfo\\.txt.*");
+	public static final String PLACEHOLDER_EXTENSION = ".S3.txt"; //don't change this
+	public static final String RESTORE_PLACEHOLDER_EXTENSION = ".S3.txt.restore"; //don't change this
+	public static final String DELETE_PLACEHOLDER_EXTENSION = ".S3.txt.delete"; //don't change this
+	public static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\.S3\\.txt.*");
 	private ArrayList<String> errorMessages = null;
 	
 	/**Null for unset,  STANDARD, RESTORE, DELETE.*/
 	private String type = null;
-	public static final String TYPE_STANDARD = "STANDARD";
+	public static final String TYPE_PLACEHOLDER = "PLACEHOLDER";
 	public static final String TYPE_RESTORE = "RESTORE";
 	public static final String TYPE_DELETE = "DELETE";
 	
@@ -44,16 +44,17 @@ public class Placeholder {
 	 * Only the first can be downloaded directly.*/
 	private String storageClass = "";
 	
+	
 	public Placeholder() {};
 	
-	public Placeholder(File f) throws IOException {
+	public Placeholder(File f, String keyDelete) throws IOException {
 		attributes = Util.parseKeyValues(f);
 		placeHolderFile = f;
 		//set type
-		if (f.getName().endsWith(PLACEHOLDER_EXTENSION)) type = TYPE_STANDARD;
+		if (f.getName().endsWith(PLACEHOLDER_EXTENSION)) type = TYPE_PLACEHOLDER;
 		else if (f.getName().endsWith(RESTORE_PLACEHOLDER_EXTENSION)) type = TYPE_RESTORE;
 		else if (f.getName().endsWith(DELETE_PLACEHOLDER_EXTENSION)) type = TYPE_DELETE;
-		checkKeyMatchesPath();
+		checkKeyMatchesPath(keyDelete);
 	}
 	
 	public void writePlaceholder(File f) {
@@ -65,6 +66,9 @@ public class Placeholder {
 			}
 			//write it
 			out = new PrintWriter( new FileWriter(f));
+			out.println("# DO NOT DELETE - Amazon S3 Archive Info");
+			out.println("# See https://github.com/HuntsmanCancerInstitute/AwsApps GSync to restore or delete the archived S3 file to this location.");
+			out.println("# "+Util.getDateTime());
 			for (String key: attributes.keySet()) out.println(key+" = "+attributes.get(key));
 			placeHolderFile = f;
 		} catch (IOException e) {
@@ -99,11 +103,11 @@ public class Placeholder {
 		return sb.toString();
 	}
 	
-	public void checkKeyMatchesPath() throws IOException {
+	public void checkKeyMatchesPath(String keyDelete) throws IOException {
 		String key = attributes.get("key");
 		if (key == null) throw new IOException("Failed to find the 'key' attribute in "+placeHolderFile);
-		String cp = placeHolderFile.getCanonicalPath();
-		String tp = PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("").substring(1);
+		String cp = placeHolderFile.getCanonicalPath().replaceFirst(keyDelete, "");
+		String tp = PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("");
 		keyMatchesLocalPlaceholderPath = tp.equals(key);
 	}
 

@@ -15,6 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Random;
 import java.util.regex.Pattern;
@@ -247,6 +249,18 @@ public class Util {
 			} catch (IOException e1) {}
 		}
 		return true;
+	}
+	
+	/**Returns a nicely formated time, 15 May 2004 21:53.
+	 * (Note, all I can say is that the GC DateFormat Date classes are so convoluted as to be utterly useless. Shame!)*/
+	public static String getDateTime(){
+		String[] months = {"Jan","Feb","Mar","Apr","May","June","July", "Aug","Sept","Oct","Nov","Dec"};
+		GregorianCalendar c = new GregorianCalendar();
+		int minutes = c.get(Calendar.MINUTE);
+		String min;
+		if (minutes < 10) min = "0"+minutes;
+		else min = ""+minutes;
+		return c.get(Calendar.DAY_OF_MONTH)+" "+months[c.get(Calendar.MONTH)]+" "+ c.get(Calendar.YEAR)+" "+c.get(Calendar.HOUR_OF_DAY)+":"+min;
 	}
 
 }
