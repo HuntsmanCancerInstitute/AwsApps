@@ -8,13 +8,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.iterable.S3Objects;
+import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
+import com.amazonaws.services.s3.model.CopyPartRequest;
+import com.amazonaws.services.s3.model.CopyPartResult;
+import com.amazonaws.services.s3.model.GetObjectMetadataRequest;
+import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
+import com.amazonaws.services.s3.model.InitiateMultipartUploadResult;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.ObjectMetadata;
+import com.amazonaws.services.s3.model.PartETag;
 import com.amazonaws.services.s3.model.RestoreObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
@@ -144,88 +153,110 @@ public class GSync {
 	 * @throws IOException 
 	 * @return null if no problems or error statement.*/
 	private String updateKeys() throws IOException {
-		p("\nAttempting to update S3 keys to match local placeholder paths...");
-		
-		//need to check that the S3 key exists
-		//need to check that the destination key does not exist
-		
-		//make hash of destination keys and clear error messages
-		HashSet<String> destinationKeys = new HashSet<String>();
-		for (Placeholder p: keyPlaceholderToUpdate.values()) {
-			String cp = p.getPlaceHolderFile().getCanonicalPath().replaceFirst(deleteFromKey, "");
-			String newKey = Placeholder.PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("");			
-			destinationKeys.add(newKey);
-		}
-		ArrayList<String> destinationKeysAlreadyExisting = new ArrayList<String>(); 
-		
-		String region = Util.getRegionFromCredentials();
-		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		ListObjectsV2Result result;
-		
-		//must watch for truncated results
-		do {
-			result = s3.listObjectsV2(bucketName);
-			//for each S3Object
-			for (S3ObjectSummary os : result.getObjectSummaries()) {
-				String key = os.getKey();
-				Placeholder p = keyPlaceholderToUpdate.get(key);
-				if (p != null) p.setFoundInS3(true);
-				if (destinationKeys.contains(key)) destinationKeysAlreadyExisting.add(key);
-			}
-			result.setContinuationToken(result.getNextContinuationToken());
-		} while (result.isTruncated());
-		
-		//Look for problems
-		boolean okToFix = true;
-		
-		//Missing S3 Objects?
-		for (Placeholder ph: keyPlaceholderToUpdate.values()) {
-			if (ph.isFoundInS3() == false) {
-				p("\tMissing S3 Object "+ph.getAttribute("key"));
-				okToFix = false;
-			}
-		}
-		
-		//Existing destination keys?
-		if (destinationKeysAlreadyExisting.size() != 0) {
-			for (String key: destinationKeysAlreadyExisting) p("\tDestination key already exists "+key);
-			okToFix = false;
-		}
-		
-		//run fix? 
 		String error = null;
-		if (okToFix) {
-			Placeholder working = null;
-			String sum = null;
-			// each execution will throw errors if problems were encountered, catch them to include info in error
-			try {
-				for (Placeholder ph: keyPlaceholderToUpdate.values()) {
-					working = ph;
-					String currKey = working.getAttribute("key");
-					String temp = ph.getPlaceHolderFile().getCanonicalPath().replaceFirst(deleteFromKey, "");
-					String destKey = Placeholder.PLACEHOLDER_PATTERN.matcher(temp).replaceFirst("");
-					
-					sum = "\t"+currKey+" -> "+destKey+" updating "+working.getPlaceHolderFile();
-					if (verbose) p(sum);
-					//copy object to new location
-					s3.copyObject(bucketName, currKey, bucketName, destKey);
-					//delete the original
-					s3.deleteObject(bucketName, currKey);
-					//update placeholder
-					working.getAttributes().put("key", destKey);
-					working.writePlaceholder(ph.getPlaceHolderFile());
-				}
-				if (verbose) p("\tAll keys sucessfully updated. Ready to relaunch GSync.");
-			} catch (Exception e) {
-				error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+sum+"\n"+e.getMessage();
-				e(error);
-				if (verbose) e.printStackTrace();
-			} 
-		}
-		else error = "\tProblems found with current or destination keys. Address and restart.";
-		s3.shutdown();
+		Placeholder working = null;
+		try {
+			p("\nUpdating S3 keys to match local placeholder paths...");
+
+			String region = Util.getRegionFromCredentials();
+			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+
+			//for each key needing to be updated
+			for (Placeholder p: keyPlaceholderToUpdate.values()) {
+				working = p;
+				//create new key
+				String cp = p.getPlaceHolderFile().getCanonicalPath().replaceFirst(deleteFromKey, "");
+				String newKey = Placeholder.PLACEHOLDER_PATTERN.matcher(cp).replaceFirst("");
+
+				//pull old key
+				String oldKey = p.getAttribute("key");
+				if (verbose) p("\t"+oldKey +" -> "+newKey);
+
+				//check if old key exists
+				if (s3.doesObjectExist(bucketName, oldKey) == false) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". Original key doesn't exist.");
+
+				//check if new key already exists
+				if (s3.doesObjectExist(bucketName, newKey)) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". It already exists.");
+
+				//copy object to new location
+				copyObject(oldKey, newKey);
+				
+				//delete the original reference
+				s3.deleteObject(bucketName, oldKey);
+				
+				//update placeholder file
+				p.getAttributes().put("key", newKey);
+				p.writePlaceholder(p.getPlaceHolderFile());
+			}
+			if (verbose) p("\tAll keys sucessfully updated. Ready to relaunch GSync.");
+			s3.shutdown();
+
+		} catch (Exception e) {
+			error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+e.getMessage();
+			e(error);
+			if (verbose) e.printStackTrace();
+		} 
+
 		return error;
 	}
+
+
+	private void copyObject(String sourceObjectKey, String destObjectKey) throws IOException{
+		
+		//how big is it? If over 5GB must use multipart
+        GetObjectMetadataRequest metadataRequest = new GetObjectMetadataRequest(bucketName, sourceObjectKey);
+        ObjectMetadata metadataResult = s3.getObjectMetadata(metadataRequest);
+        long objectSize = metadataResult.getContentLength();
+		
+		if (objectSize < 5368709120l) s3.copyObject(bucketName, sourceObjectKey, bucketName, destObjectKey);
+		
+		else {
+			// Initiate the multipart upload.
+            InitiateMultipartUploadRequest initRequest = new InitiateMultipartUploadRequest(bucketName, destObjectKey);
+            InitiateMultipartUploadResult initResult = s3.initiateMultipartUpload(initRequest);
+            // Copy the object using 5 MB parts.
+            long partSize = 5 * 1024 * 1024;
+            long bytePosition = 0;
+            int partNum = 1;
+            List<CopyPartResult> copyResponses = new ArrayList<CopyPartResult>();
+            while (bytePosition < objectSize) {
+                // The last part might be smaller than partSize, so check to make sure
+                // that lastByte isn't beyond the end of the object.
+                long lastByte = Math.min(bytePosition + partSize - 1, objectSize - 1);
+
+                // Copy this part.
+                CopyPartRequest copyRequest = new CopyPartRequest()
+                        .withSourceBucketName(bucketName)
+                        .withSourceKey(sourceObjectKey)
+                        .withDestinationBucketName(bucketName)
+                        .withDestinationKey(destObjectKey)
+                        .withUploadId(initResult.getUploadId())
+                        .withFirstByte(bytePosition)
+                        .withLastByte(lastByte)
+                        .withPartNumber(partNum++);
+                copyResponses.add(s3.copyPart(copyRequest));
+                bytePosition += partSize;
+            }
+
+            // Complete the upload request to concatenate all uploaded parts and make the copied object available.
+            CompleteMultipartUploadRequest completeRequest = new CompleteMultipartUploadRequest(
+            		bucketName,
+                    destObjectKey,
+                    initResult.getUploadId(),
+                    getETags(copyResponses));
+            s3.completeMultipartUpload(completeRequest);
+		}
+	}
+	
+    // This is a helper function to construct a list of ETags.
+    private static List<PartETag> getETags(List<CopyPartResult> responses) {
+        List<PartETag> etags = new ArrayList<PartETag>();
+        for (CopyPartResult response : responses) {
+            etags.add(new PartETag(response.getPartNumber(), response.getETag()));
+        }
+        return etags;
+    }
+
 
 	/*Assumes the Path is a symlink,  if broken, looks for the associated placeholder file,
 	 * if present, creates a new symlink pointed at the placeholder and deletes the original symlink.
@@ -397,7 +428,7 @@ public class GSync {
 	}
 	
 	public boolean requestArchiveRestore(String key, AmazonS3 s3Client) throws IOException {
-			//check if restore in progress
+		//check if restore in progress
 		ObjectMetadata response = s3Client.getObjectMetadata(bucketName, key);
         Boolean restoreFlag = response.getOngoingRestore();
         //request never received
@@ -668,58 +699,50 @@ public class GSync {
 	private static void e(String s) {
 		System.err.println(s);
 	}
-
+	
 	private void scanBucket() throws IOException {
 		
 		p("\nScanning S3 bucket...");
-		
 		region = Util.getRegionFromCredentials();
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		ListObjectsV2Result result;
-        
-        //must watch for truncated results
-        do {
-            result = s3.listObjectsV2(bucketName);
+		
+		
+		S3Objects.inBucket(s3, bucketName).forEach((S3ObjectSummary os) -> {
+			String key = os.getKey();
 
-            for (S3ObjectSummary os : result.getObjectSummaries()) {
-            	String key = os.getKey();
+        	//check candidatesForUpload
+        	if (candidatesForUpload.containsKey(key)) {
+        		//OK, a local fat old file with the same name has already been uploaded to S3
+        		//check size and etag
+        		if (os.getSize() == candidatesForUpload.get(key).length()) {
+        			//check for a placeholder
+        			if (placeholders.containsKey(key))localFileAlreadyUploaded.add(candidatesForUpload.get(key));
+        			else  localFileAlreadyUploadedNoPlaceholder.add(candidatesForUpload.get(key));
+        		}
+        		else localFileAlreadyUploadedButDiffSize.add(candidatesForUpload.get(key));
+        	}
 
-            	//check candidatesForUpload
-            	if (candidatesForUpload.containsKey(key)) {
-            		//OK, a local fat old file with the same name has already been uploaded to S3
-            		//check size and etag
-            		if (os.getSize() == candidatesForUpload.get(key).length()) {
-            			//check for a placeholder
-            			if (placeholders.containsKey(key))localFileAlreadyUploaded.add(candidatesForUpload.get(key));
-            			else  localFileAlreadyUploadedNoPlaceholder.add(candidatesForUpload.get(key));
-            		}
-            		else localFileAlreadyUploadedButDiffSize.add(candidatesForUpload.get(key));
-            	}
-
-            	//check placeholders
-            	if (placeholders.containsKey(key)) {
-            		//OK, a local placeholder file contains the aws key
-            		Placeholder p = placeholders.get(key);
-            		p.setFoundInS3(true);
-            		//Set storage class STANDARD, DEEP_ARCHIVE, GLACIER
-            		p.setStorageClass(os.getStorageClass());
-            		//check size
-            		String size = p.getAttribute("size");
-            		if (Long.parseLong(size) == os.getSize()) p.setS3SizeMatches(true);
-            		else p.setS3SizeMatches(false);
-            		//check etag
-            		if (p.getAttribute("etag").equals(os.getETag())) p.setS3EtagMatches(true);
-            		else p.setS3EtagMatches(false);
-            	}
-            	
-            	else if (os.getSize() != 0) {
-            		//OK, this is an unknown s3 object with no local reference
-            		s3KeyWithNoLocal.add(key);
-            	}
-            }
-            result.setContinuationToken(result.getNextContinuationToken());
-        } while (result.isTruncated());
-        
+        	//check placeholders
+        	if (placeholders.containsKey(key)) {
+        		//OK, a local placeholder file contains the aws key
+        		Placeholder p = placeholders.get(key);
+        		p.setFoundInS3(true);
+        		//Set storage class STANDARD, DEEP_ARCHIVE, GLACIER
+        		p.setStorageClass(os.getStorageClass());
+        		//check size
+        		String size = p.getAttribute("size");
+        		if (Long.parseLong(size) == os.getSize()) p.setS3SizeMatches(true);
+        		else p.setS3SizeMatches(false);
+        		//check etag
+        		if (p.getAttribute("etag").equals(os.getETag())) p.setS3EtagMatches(true);
+        		else p.setS3EtagMatches(false);
+        	}
+        	
+        	else if (os.getSize() != 0) {
+        		//OK, this is an unknown s3 object with no local reference
+        		s3KeyWithNoLocal.add(key);
+        	}
+		});
         s3.shutdown();
 	}
 

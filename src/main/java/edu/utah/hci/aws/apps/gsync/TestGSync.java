@@ -39,7 +39,7 @@ public class TestGSync {
 	/*Adjust these fields to match your testing environment	 */
 	
 	/**Be sure this bucket exists and doesn't contain anything you care about. WARNING, it will be emptied!*/
-	private static final String testS3BucketName = "hcibioinfo-gsync-test";
+	private static final String testS3BucketName = "hcibioinfo-gsync-test2";
 
 	/**Directory in the AwsApps project containing the GSync.zip file. MUST end with a / */
 	private static final String pathToTestData = "/Users/u0028003/Code/AwsApps/TestData/";
@@ -565,7 +565,7 @@ public class TestGSync {
 			try {
 				gs.doWork();
 			} catch (Exception e) { 
-				assertTrue(e.getMessage().contains("Problems found with current or destination keys"));
+				assertTrue(e.getMessage().contains("Original key doesn't exist"));
 			}
 			
 			assertFalse(gs.isResultsCheckOK());
