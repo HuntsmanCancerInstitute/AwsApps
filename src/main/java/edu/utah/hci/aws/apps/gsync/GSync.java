@@ -31,6 +31,8 @@ import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
+import com.amazonaws.services.s3.transfer.Download;
+import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
@@ -162,6 +164,7 @@ public class GSync {
 			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 
 			//for each key needing to be updated
+			int numUpdated = 0;
 			for (Placeholder p: keyPlaceholderToUpdate.values()) {
 				working = p;
 				//create new key
@@ -170,10 +173,18 @@ public class GSync {
 
 				//pull old key
 				String oldKey = p.getAttribute("key");
-				if (verbose) p("\t"+oldKey +" -> "+newKey);
-
+				p("\t"+oldKey +" -> "+newKey);
+				
 				//check if old key exists
 				if (s3.doesObjectExist(bucketName, oldKey) == false) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". Original key doesn't exist.");
+			
+				//check storage class, may need to trigger a pull from glacier to S3.
+				ObjectMetadata omd = s3.getObjectMetadata(bucketName, oldKey);
+				
+				boolean ready = true;
+				String sc = omd.getStorageClass();
+				if ( sc != null) ready = requestArchiveRestore(oldKey, s3);
+				if (ready == false) continue;
 
 				//check if new key already exists
 				if (s3.doesObjectExist(bucketName, newKey)) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". It already exists.");
@@ -187,8 +198,9 @@ public class GSync {
 				//update placeholder file
 				p.getAttributes().put("key", newKey);
 				p.writePlaceholder(p.getPlaceHolderFile());
+				numUpdated++;
 			}
-			if (verbose) p("\tAll keys sucessfully updated. Ready to relaunch GSync.");
+			if (verbose) p("\t"+ numUpdated +" keys sucessfully updated. Relaunch GSync.");
 			s3.shutdown();
 
 		} catch (Exception e) {
@@ -210,6 +222,7 @@ public class GSync {
 		
 		if (objectSize < 5368709120l) s3.copyObject(bucketName, sourceObjectKey, bucketName, destObjectKey);
 		
+		//this is really slow!
 		else {
 			// Initiate the multipart upload.
             InitiateMultipartUploadRequest initRequest = new InitiateMultipartUploadRequest(bucketName, destObjectKey);
@@ -362,13 +375,14 @@ public class GSync {
 	
 	private String restore() {
 		p("\nRestoring "+restorePlaceholders.size()+" S3 Objects and renaming their restore placeholders to standard...");
-		FileOutputStream fos = null;
-		S3ObjectInputStream s3is = null;
+
 		File localFile = null;
 		File tempFile = null;
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
 		int numRestored = 0;
 		try {
+			
 			for (Placeholder p : restorePlaceholders) {
 				String key = p.getAttribute("key");
 				p("\t"+key+"\t"+p.getPlaceHolderFile()+"\t"+p.getStorageClass());
@@ -379,17 +393,11 @@ public class GSync {
 
 				//good to go?
 				if (download) {
-					S3Object o = s3.getObject(bucketName, key);
-					s3is = o.getObjectContent();
 					localFile = p.getLocalFile();
 					tempFile = new File(localFile.getParentFile(), "tempRestore_"+localFile.getName());
-					fos = new FileOutputStream(tempFile);
-					byte[] read_buf = new byte[1024];
-					int read_len = 0;
-					while ((read_len = s3is.read(read_buf)) > 0) fos.write(read_buf, 0, read_len);
-					s3is.close();
-					fos.close();
-
+					
+					downloadFile(tm, bucketName, key, tempFile, false) ;
+					
 					//check the size
 					long placeholderSize = Long.parseLong(p.getAttribute("size"));
 					if (placeholderSize != tempFile.length()) throw new IOException("The restored file's size ("+tempFile.length()+"does not match the placeholder size\n"+p.getMinimalInfo());
@@ -401,31 +409,30 @@ public class GSync {
 					File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
 					p.getPlaceHolderFile().renameTo(stdPlaceholder);
 					numRestored++;
-					
 				}
 			}
+			tm.shutdownNow();
 		} catch (Exception e) {
 			//delete the temp and local
 			if (localFile != null) localFile.delete();
 			if (tempFile != null) tempFile.delete();
-
-			//close the IO
-			try {
-				if (s3is != null)s3is.close();
-				if (fos != null)fos.close();
-				s3.shutdown();
-			} catch (IOException ex) {}
-
+			tm.shutdownNow();
+			
 			//return the error
 			if (verbose) e.printStackTrace();
-			String m = e.getMessage();
-			if (m.contains("SSL peer shut down incorrectly")) m = "AWS rejected download request, try again later. AWS message '"+m+"'";
-			return "\nRESTORE ERROR: "+m;
+			return "\nRESTORE ERROR: "+e.getMessage();
 		} 
-		s3.shutdown();
+
 		p("\t"+numRestored+" resources restored");
 		return "";
 	}
+	
+	public static void downloadFile(TransferManager tm, String bucket_name, String key_name, File f, boolean pause) throws Exception {
+		Download xfer = tm.download(bucket_name, key_name, f);
+		xfer.waitForCompletion();
+	}
+
+	
 	
 	public boolean requestArchiveRestore(String key, AmazonS3 s3Client) throws IOException {
 		//check if restore in progress
@@ -433,13 +440,13 @@ public class GSync {
         Boolean restoreFlag = response.getOngoingRestore();
         //request never received
         if (restoreFlag == null) {
-        	p("\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours to download.");
+        	p("\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours.");
             // Create and submit a request to restore an object from Glacier to S3 for xxx days.
            RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, DAYS_IN_S3);
            s3Client.restoreObjectV2(requestRestore);
         }
         //true, in progress
-        else if (restoreFlag == true) p("\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours to download.");
+        else if (restoreFlag == true) p("\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours.");
         //false, ready for download
         else return true;
         return false;
@@ -706,7 +713,6 @@ public class GSync {
 		region = Util.getRegionFromCredentials();
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		
-		
 		S3Objects.inBucket(s3, bucketName).forEach((S3ObjectSummary os) -> {
 			String key = os.getKey();
 
@@ -957,9 +963,9 @@ public class GSync {
 				"     to '.bam,.cram,.gz,.zip'\n" +
 				"-a Minimum days old for archiving, defaults to 60\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
-				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
+				"-r Perform a real run, defaults to just listing the actions that would be taken.\n"+
 				"-k Delete local files that were successfully  uploaded.\n"+
-				"-u Update S3 Object keys to match current placeholder paths.\n"+
+				"-u Update S3 Object keys to match current placeholder paths, slow for large files.\n"+
 				//"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
 				//"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"-v Verbose output\n"+
