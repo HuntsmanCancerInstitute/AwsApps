@@ -385,7 +385,7 @@ public class GSync {
 			
 			for (Placeholder p : restorePlaceholders) {
 				String key = p.getAttribute("key");
-				p("\t"+key+"\t"+p.getPlaceHolderFile()+"\t"+p.getStorageClass());
+				System.out.print("\t"+key+"\t"+p.getPlaceHolderFile()+"\t"+p.getStorageClass()+"\t");
 
 				//check storage class, may need to trigger a pull from glacier to S3.
 				boolean download = true;
@@ -393,6 +393,7 @@ public class GSync {
 
 				//good to go?
 				if (download) {
+					long startTime = System.currentTimeMillis();
 					localFile = p.getLocalFile();
 					tempFile = new File(localFile.getParentFile(), "tempRestore_"+localFile.getName());
 					
@@ -409,6 +410,10 @@ public class GSync {
 					File stdPlaceholder = new File (localFile.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
 					p.getPlaceHolderFile().renameTo(stdPlaceholder);
 					numRestored++;
+					
+					//calc time
+				    double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
+					p(Util.formatNumber(diffTime, 1)+" min");
 				}
 			}
 			tm.shutdownNow();
@@ -440,13 +445,13 @@ public class GSync {
         Boolean restoreFlag = response.getOngoingRestore();
         //request never received
         if (restoreFlag == null) {
-        	p("\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours.");
+        	p("\n\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours.");
             // Create and submit a request to restore an object from Glacier to S3 for xxx days.
            RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, DAYS_IN_S3);
            s3Client.restoreObjectV2(requestRestore);
         }
         //true, in progress
-        else if (restoreFlag == true) p("\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours.");
+        else if (restoreFlag == true) p("\n\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours.");
         //false, ready for download
         else return true;
         return false;
