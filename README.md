@@ -27,17 +27,17 @@ To use the app:
    aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
    region = us-west-2
 4) Execute GSync to upload large old files to S3 and replace them with a placeholder
-   file named xxx.ArchiveInfo.txt
-5) To download and restore an archived file, rename the placeholder 
-   xxx.ArchiveInfo.txt.restore
-   and run GSync.
-6) To delete an archived file, it's placeholder, and any local files, rename the 
-   placeholder xxx.ArchiveInfo.txt.delete and run GSync.
+   file named xxx.S3.txt
+5) To download and restore an archived file, rename the placeholder
+   xxx.S3.txt.restore and run GSync.
+6) To delete an S3 archived file, it's placeholder, and any local files, rename the 
+   placeholder xxx.S3.txt.delete and run GSync.
    Versioned copies on S3 will not be deleted. Use the S3 Console to do so.
-7) Placeholder files may be moved, see -u; broken symlinks can be updated, see -s
+7) Placeholder files may be moved, see -u
 
 Required:
--d Path to a local directory to sync
+-d Path to a local directory to sync. This becomes the base key in S3, e.g. 
+     BucketName/LocalDirName/...
 -b Dediated S3 bucket name
 
 Optional:
@@ -45,14 +45,12 @@ Optional:
      to '.bam,.cram,.gz,.zip'
 -a Minimum days old for archiving, defaults to 60
 -g Minimum gigabyte size for archiving, defaults to 5
--r Perform a real run, defaults to just listing the actions that would be taken
+-r Perform a real run, defaults to just listing the actions that would be taken.
 -k Delete local files that were successfully  uploaded.
--u Update S3 Object keys to match current placeholder paths.
--s Update symbolic links that point to uploaded and deleted files. This replaces the
-     broken link with a new link named xxx.ArchiveInfo.txt
+-u Update S3 Object keys to match current placeholder paths, slow for large files.
 -v Verbose output
 
-Example: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d /Repo/ -b hcibioinfo_gsync_repo 
+Example: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d Repo/ -b hcibioinfo_gsync_repo 
      -v -a 90 -g 1 
 
 **************************************************************************************
