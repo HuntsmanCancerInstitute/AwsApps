@@ -29,7 +29,7 @@ public class TestGSync {
 	/*Adjust these fields to match your testing environment	 */
 	
 	/**Be sure this bucket exists and doesn't contain anything you care about. WARNING, it will be emptied!*/
-	private static final String testS3BucketName = "hcibioinfo-gsync-test2";
+	private static final String testS3BucketName = "hcibioinfo-gsync-test";
 
 	/**Directory in the AwsApps project containing the GSync.zip file. MUST end with a / */
 	private static final String pathToTestData = "/Users/u0028003/Code/AwsApps/TestData/";
@@ -593,7 +593,7 @@ public class TestGSync {
 			String key = pathToTestData+"GSync/Cram/testNoIndex.bed.gz";
 
 			AmazonS3 s3 = AmazonS3ClientBuilder.standard().withRegion(Util.getRegionFromCredentials()).build();
-			TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
+			TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartUploadThreshold((long) (256 * 1024 * 1024)).build();
 			Upload u = tm.upload(testS3BucketName, key.substring(1), uploadFile);
 			if (Util.waitForCompletion(u) == false) throw new IOException("Failed S3 upload "+uploadFile);
 			

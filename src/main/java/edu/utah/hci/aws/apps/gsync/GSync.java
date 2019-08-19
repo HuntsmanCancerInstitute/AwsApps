@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import edu.utah.hci.aws.util.Util;
@@ -52,7 +53,7 @@ import com.amazonaws.services.s3.transfer.Upload;
 public class GSync {
 	
 	//user defined fields
-	private File localDir = null;
+	private File[] dirsToScan = null;
 	private String bucketName = null;
 	private int minDaysOld = 60;
 	private double minGigaBytes = 5;
@@ -64,10 +65,11 @@ public class GSync {
 	//private boolean updateSymlinks = false;
 
 	//internal fields
+	private String dirsToScanString = null;
 	private String deleteFromKey = null;
 	private HashMap<String, File> candidatesForUpload = new HashMap<String, File>();
 	
-	private ArrayList<File> placeholderFiles = new ArrayList<File>();
+	private TreeSet<File> placeholderFiles = new TreeSet<File>();
 	private ArrayList<Placeholder> failingPlaceholders = new ArrayList<Placeholder>();
 	private HashMap<String, Placeholder> placeholders = null;
 	private HashMap<String, Placeholder> keyPlaceholderToUpdate = new HashMap<String, Placeholder>();
@@ -379,7 +381,7 @@ public class GSync {
 		File localFile = null;
 		File tempFile = null;
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
+		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartUploadThreshold((long) (256 * 1024 * 1024)).build();
 		int numRestored = 0;
 		try {
 			
@@ -475,7 +477,7 @@ public class GSync {
 
 	private void upload() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
+		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartUploadThreshold((long) (256 * 1024 * 1024)).build();
 		
 		//anything to upload?  all of these methods throw an IOException 
 		if (candidatesForUpload.size() !=0) {
@@ -708,6 +710,10 @@ public class GSync {
 	private static void p(String s) {
 		System.out.println(s);
 	}
+	private static void ex(String s) {
+		System.err.println(s);
+		System.exit(1);
+	}
 	private static void e(String s) {
 		System.err.println(s);
 	}
@@ -797,7 +803,7 @@ public class GSync {
 
 	void scanLocalDir() throws IOException {
 		p("\nScanning local directory...");
-		scanDirectory(localDir, fileExtensions);
+		for (File d: dirsToScan) scanDirectory(d, fileExtensions);
 		if (verbose) p("\t"+candidatesForUpload.size()+" candidate files with indexes for upload");
 	}
 
@@ -869,6 +875,7 @@ public class GSync {
 	public void processArgs(String[] args) throws IOException{
 		Pattern pat = Pattern.compile("-[a-z]");
 		p("GSync Arguments: "+Util.stringArrayToString(args, " ")+"\n");
+		String dirString = null;
 		for (int i = 0; i<args.length; i++){
 			String lcArg = args[i].toLowerCase();
 			Matcher mat = pat.matcher(lcArg);
@@ -876,7 +883,7 @@ public class GSync {
 				char test = args[i].charAt(1);
 				try{
 					switch (test){
-					case 'd': localDir = new File (args[++i]); break;
+					case 'd': dirString = args[++i]; break;
 					case 'b': bucketName = args[++i]; break;
 					case 'a': minDaysOld = Integer.parseInt(args[++i]); break;
 					case 'g': minGigaBytes = Double.parseDouble(args[++i]); break;
@@ -895,22 +902,60 @@ public class GSync {
 				}
 			}
 		}
-
-		//check params
-		if (localDir == null || localDir.canRead() == false || localDir.isFile()) e("\nError: please provide a directory to sync with S3\n");
-		if (bucketName == null) e("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
-
-		localDir = localDir.getCanonicalFile();
-		deleteFromKey = localDir.getParentFile().getCanonicalPath()+"/";
-
+		
+		//create dirs
+		if (dirString == null) ex("\nError: please provide one or more directories to sync with S3, comma delimited, no spaces, relative path.\n");
+		
+		setScanPaths(dirString);
+		
+		//check bucket
+		if (bucketName == null) ex("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
 		if (dryRun) deleteUploaded = false;
 		
 		printOptions();
 	}	
+	
+	private void setScanPaths(String dirString) throws IOException {
+		String[] splitDirString = Util.COMMA.split(dirString);
+		
+		dirsToScan = new File[splitDirString.length];
+		StringBuilder sb = new StringBuilder();	
+		for (int i=0; i< dirsToScan.length; i++) {
+			dirsToScan[i] = new File(splitDirString[i]).getCanonicalFile();
+			if (dirsToScan[i].exists() == false) throw new IOException("Fails to exist "+dirsToScan[i]);
+			sb.append(dirsToScan[i].toString());
+			if (i!=(dirsToScan.length-1)) sb.append(", ");
+		}
+		dirsToScanString = sb.toString();	
+		
+		//find index of last common parent folder
+		String[] firstDirs = Util.FORWARD_SLASH.split(dirsToScan[0].toString().substring(1));
+		String prior = "/";
+		
+		//check each dir in the test
+		for (int x=0; x<firstDirs.length; x++) {		
+			String test = prior+ firstDirs[x]+ "/";
+			//for each path to scan
+			boolean stop = false;
+			for (int i=1; i< dirsToScan.length; i++) {
+				if (dirsToScan[i].toString().startsWith(test) == false) {
+					stop = true;
+					break;
+				}
+			}
+			if (stop) break;
+			else prior = test;
+		}
+		
+		//create the deleteFromKey field
+		File parent = new File(prior).getCanonicalFile();
+		deleteFromKey = parent.getParentFile().getCanonicalPath()+"/";
+		if (deleteFromKey.equals("//")) deleteFromKey = "/";	
+	}
 
 	private void printOptions() {
 		p("Options:");
-		p("  -d Local directory           : "+ localDir);
+		p("  -d Local directories         : "+ dirsToScanString);
 		p("  -b S3 Bucket name            : "+ bucketName);
 		p("  -e File extensions           : "+ Util.stringArrayToString(fileExtensions, ","));
 		p("  -a Min file days             : "+ minDaysOld);
@@ -959,8 +1004,9 @@ public class GSync {
 				"7) Placeholder files may be moved, see -u\n"+ //; broken symlinks can be updated, see -s\n"+
 				
 				"\nRequired:\n"+
-				"-d Path to a local directory to sync. This becomes the base key in S3, e.g. \n"+
-				"     BucketName/LocalDirName/...\n"+
+				"-d One or more local directories with the same parent to sync.\n"+
+				"     This parent dir becomes the base key in S3, e.g. BucketName/Parent/.... Comma\n"+
+				"     delimited, no spaces, see the example.\n"+
 				"-b Dediated S3 bucket name\n"+
 
 				"\nOptional:\n" +
@@ -975,15 +1021,16 @@ public class GSync {
 				//"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"-v Verbose output\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d Repo/ -b hcibioinfo_gsync_repo \n"+
-				"     -v -a 90 -g 1 \n\n"+
+				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -r -u -k -b hcibioinfo_gsync_repo \n"+
+				"     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq\n\n"+
 
 				"**************************************************************************************\n");
 
 	}
 
 	public void setLocalDir(File localDir) throws IOException {
-		this.localDir = localDir;
+		dirsToScan = new File[1];
+		dirsToScan[0] = localDir;
 		deleteFromKey = localDir.getParentFile().getCanonicalPath()+"/";
 	}
 
@@ -1023,7 +1070,7 @@ public class GSync {
 	}
 
 
-	public ArrayList<File> getPlaceholderFiles() {
+	public TreeSet<File> getPlaceholderFiles() {
 		return placeholderFiles;
 	}
 

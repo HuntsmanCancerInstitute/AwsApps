@@ -32,6 +32,7 @@ public class Util {
 
 	public static final Pattern COMMA = Pattern.compile(",");
 	public static final Pattern EQUALS = Pattern.compile("\\s*=\\s*");
+	public static final Pattern FORWARD_SLASH = Pattern.compile("/");
 	
 	public static double gigaBytes(File file) {
 		double bytes = file.length();
@@ -231,6 +232,7 @@ public class Util {
 	
 	/** Fast & simple file copy. From GForman http://www.experts-exchange.com/M_500026.html
 	 * Hit an odd bug with a "Size exceeds Integer.MAX_VALUE" error when copying a vcf file. -Nix.*/
+	@SuppressWarnings("resource")
 	public static boolean copyViaFileChannel(File source, File dest){
 		FileChannel in = null, out = null;
 		try {
