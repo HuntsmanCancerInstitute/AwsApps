@@ -1,6 +1,8 @@
 # AwsApps
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app.
 <pre>
+java -jar -Xmx10G ~/Code/AwsApps/GSync_0.1.jar 
+
 **************************************************************************************
 **                                  GSync : August 2019                             **
 **************************************************************************************
@@ -36,8 +38,9 @@ To use the app:
 7) Placeholder files may be moved, see -u
 
 Required:
--d Path to a local directory to sync. This becomes the base key in S3, e.g. 
-     BucketName/LocalDirName/...
+-d One or more local directories with the same parent to sync. This parent dir
+     becomes the base key in S3, e.g. BucketName/Parent/.... Comma delimited, no
+     spaces, see the example.
 -b Dediated S3 bucket name
 
 Optional:
@@ -46,12 +49,11 @@ Optional:
 -a Minimum days old for archiving, defaults to 60
 -g Minimum gigabyte size for archiving, defaults to 5
 -r Perform a real run, defaults to just listing the actions that would be taken.
--k Delete local files that were successfully  uploaded.
+-k Delete local files that were successfully uploaded.
 -u Update S3 Object keys to match current placeholder paths, slow for large files.
 -v Verbose output
 
-Example: java -Xmx20G -jar pathTo/USeq/Apps/GSync -d Repo/ -b hcibioinfo_gsync_repo 
-     -v -a 90 -g 1 
+Example: java -Xmx10G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo 
+     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq
 
-**************************************************************************************
-</pre>
+**************************************************************************************/pre>
