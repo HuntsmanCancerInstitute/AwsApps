@@ -1,14 +1,11 @@
 package edu.utah.hci.aws.apps.gsync;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -16,24 +13,13 @@ import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.iterable.S3Objects;
-import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
-import com.amazonaws.services.s3.model.CopyPartRequest;
-import com.amazonaws.services.s3.model.CopyPartResult;
-import com.amazonaws.services.s3.model.GetObjectMetadataRequest;
-import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
-import com.amazonaws.services.s3.model.InitiateMultipartUploadResult;
-import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.ObjectMetadata;
-import com.amazonaws.services.s3.model.PartETag;
 import com.amazonaws.services.s3.model.RestoreObjectRequest;
-import com.amazonaws.services.s3.model.S3Object;
-import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
-import com.amazonaws.SdkClientException;
+import com.amazonaws.services.s3.transfer.Copy;
 import com.amazonaws.services.s3.transfer.Download;
-import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
@@ -114,6 +100,8 @@ public class GSync {
 	
 	void doWork() throws Exception{
 		
+		region = Util.getRegionFromCredentials();
+		
 		scanLocalDir();
 
 		parsePlaceholderFiles();
@@ -162,7 +150,6 @@ public class GSync {
 		try {
 			p("\nUpdating S3 keys to match local placeholder paths...");
 
-			String region = Util.getRegionFromCredentials();
 			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 
 			//for each key needing to be updated
@@ -209,68 +196,18 @@ public class GSync {
 			error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+e.getMessage();
 			e(error);
 			if (verbose) e.printStackTrace();
+			if (s3 != null) s3.shutdown();
 		} 
 
 		return error;
 	}
-
-
-	private void copyObject(String sourceObjectKey, String destObjectKey) throws IOException{
-		
-		//how big is it? If over 5GB must use multipart
-        GetObjectMetadataRequest metadataRequest = new GetObjectMetadataRequest(bucketName, sourceObjectKey);
-        ObjectMetadata metadataResult = s3.getObjectMetadata(metadataRequest);
-        long objectSize = metadataResult.getContentLength();
-		
-		if (objectSize < 5368709120l) s3.copyObject(bucketName, sourceObjectKey, bucketName, destObjectKey);
-		
-		//this is really slow!
-		else {
-			// Initiate the multipart upload.
-            InitiateMultipartUploadRequest initRequest = new InitiateMultipartUploadRequest(bucketName, destObjectKey);
-            InitiateMultipartUploadResult initResult = s3.initiateMultipartUpload(initRequest);
-            // Copy the object using 5 MB parts.
-            long partSize = 5 * 1024 * 1024;
-            long bytePosition = 0;
-            int partNum = 1;
-            List<CopyPartResult> copyResponses = new ArrayList<CopyPartResult>();
-            while (bytePosition < objectSize) {
-                // The last part might be smaller than partSize, so check to make sure
-                // that lastByte isn't beyond the end of the object.
-                long lastByte = Math.min(bytePosition + partSize - 1, objectSize - 1);
-
-                // Copy this part.
-                CopyPartRequest copyRequest = new CopyPartRequest()
-                        .withSourceBucketName(bucketName)
-                        .withSourceKey(sourceObjectKey)
-                        .withDestinationBucketName(bucketName)
-                        .withDestinationKey(destObjectKey)
-                        .withUploadId(initResult.getUploadId())
-                        .withFirstByte(bytePosition)
-                        .withLastByte(lastByte)
-                        .withPartNumber(partNum++);
-                copyResponses.add(s3.copyPart(copyRequest));
-                bytePosition += partSize;
-            }
-
-            // Complete the upload request to concatenate all uploaded parts and make the copied object available.
-            CompleteMultipartUploadRequest completeRequest = new CompleteMultipartUploadRequest(
-            		bucketName,
-                    destObjectKey,
-                    initResult.getUploadId(),
-                    getETags(copyResponses));
-            s3.completeMultipartUpload(completeRequest);
-		}
-	}
 	
-    // This is a helper function to construct a list of ETags.
-    private static List<PartETag> getETags(List<CopyPartResult> responses) {
-        List<PartETag> etags = new ArrayList<PartETag>();
-        for (CopyPartResult response : responses) {
-            etags.add(new PartETag(response.getPartNumber(), response.getETag()));
-        }
-        return etags;
-    }
+	private void copyObject(String sourceObjectKey, String destObjectKey) throws Exception{
+		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartCopyThreshold((long) (256 * 1024 * 1024)).build();
+		Copy copy = tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey);
+		copy.waitForCompletion();
+	}
 
 
 	/*Assumes the Path is a symlink,  if broken, looks for the associated placeholder file,
@@ -381,7 +318,8 @@ public class GSync {
 		File localFile = null;
 		File tempFile = null;
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartUploadThreshold((long) (256 * 1024 * 1024)).build();
+		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).build();
+
 		int numRestored = 0;
 		try {
 			
@@ -615,7 +553,7 @@ public class GSync {
 			if (candidatesForUpload.size() !=0) {
 				if (dryRun) {
 					p("\nThe following local files meet criteria and are ready for upload. Restart with the -r option.");
-					for (String f: candidatesForUpload.keySet()) p("\t/"+f);
+					for (String f: candidatesForUpload.keySet()) p("\t"+f);
 				}
 			}
 			else if (verbose) p("\nNo local files were found that are ready for upload.");
@@ -721,7 +659,6 @@ public class GSync {
 	private void scanBucket() throws IOException {
 		
 		p("\nScanning S3 bucket...");
-		region = Util.getRegionFromCredentials();
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		
 		S3Objects.inBucket(s3, bucketName).forEach((S3ObjectSummary os) -> {
@@ -1004,9 +941,9 @@ public class GSync {
 				"7) Placeholder files may be moved, see -u\n"+ //; broken symlinks can be updated, see -s\n"+
 				
 				"\nRequired:\n"+
-				"-d One or more local directories with the same parent to sync.\n"+
-				"     This parent dir becomes the base key in S3, e.g. BucketName/Parent/.... Comma\n"+
-				"     delimited, no spaces, see the example.\n"+
+				"-d One or more local directories with the same parent to sync. This parent dir\n"+
+				"     becomes the base key in S3, e.g. BucketName/Parent/.... Comma delimited, no\n"+
+				"     spaces, see the example.\n"+
 				"-b Dediated S3 bucket name\n"+
 
 				"\nOptional:\n" +
@@ -1015,13 +952,13 @@ public class GSync {
 				"-a Minimum days old for archiving, defaults to 60\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken.\n"+
-				"-k Delete local files that were successfully  uploaded.\n"+
+				"-k Delete local files that were successfully uploaded.\n"+
 				"-u Update S3 Object keys to match current placeholder paths, slow for large files.\n"+
 				//"-s Update symbolic links that point to uploaded and deleted files. This replaces the\n"+
 				//"     broken link with a new link named xxx"+Placeholder.PLACEHOLDER_EXTENSION+"\n"+
 				"-v Verbose output\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/USeq/Apps/GSync -r -u -k -b hcibioinfo_gsync_repo \n"+
+				"\nExample: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo \n"+
 				"     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq\n\n"+
 
 				"**************************************************************************************\n");
