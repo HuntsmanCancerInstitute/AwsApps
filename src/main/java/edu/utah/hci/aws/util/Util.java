@@ -9,6 +9,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -18,8 +19,16 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
+import java.util.Properties;
 import java.util.Random;
 import java.util.regex.Pattern;
+
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.Transport;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
+
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.transfer.Transfer;
@@ -113,6 +122,12 @@ public class Util {
 		return sb.toString();
 	}
 	
+	public static String getStackTrace (Throwable t) {
+		StringWriter sw = new StringWriter();
+		t.printStackTrace(new PrintWriter(sw));
+		return sw.toString();
+	}
+	
 	/**Prints message to screen, then exits.*/
 	public static void printErrAndExit (String message){
 		System.err.println (message);
@@ -122,6 +137,37 @@ public class Util {
 	public static void printExit (String message){
 		System.out.println (message);
 		System.exit(0);
+	}
+	
+	/**
+	 * Sends an email
+	 * @param recipients, e.g. david.nix@hci.utah.edu
+	 * @param subject
+	 * @param message
+	 * @param from, e.g. barack.o@hci.utah.edu
+	 * @param smtpHost, e.g. hci-mail.hci.utah.edu
+	 * @throws MessagingException
+	 */
+	public static void postMail(String recipients, String subject, String message, String from, String smtpHost) throws MessagingException {
+		//set the host smtp address
+		Properties props = new Properties();
+		props.put("mail.smtp.host", smtpHost);
+
+		//create some properties and get the default Session
+		javax.mail.Session session = javax.mail.Session.getDefaultInstance(props, null);
+
+		//create message
+		Message msg = new MimeMessage(session);
+
+		//set the from and to address
+		InternetAddress addressFrom = new InternetAddress(from);
+		msg.setFrom(addressFrom);
+		msg.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipients, false));
+
+		//setting the Subject and Content type
+		msg.setSubject(subject);
+		msg.setContent(message, "text/plain");
+		Transport.send(msg);
 	}
 	
     /** Waits for the transfer to complete, catching any exceptions that occur.

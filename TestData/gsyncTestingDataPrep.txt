@@ -18,7 +18,7 @@ ln -s GSync/Bam/testWithIndex.bam GSync/NoUpload/testSymLink.bam
 
 # Create a test bucket or delete all of the objects in the existing test bucket
 # If needed install AWS CLI, https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html 
-aws s3 rm s3://hcibioinfo-gsync-test2 --recursive
+aws s3 rm s3://hcibioinfo-gsync-test --recursive
 
 # Run GSync
 ## dry run:  -d ~/Code/AwsApps/TestData/GSync -b hcibioinfo-gsync-test -g 0.0005 -x

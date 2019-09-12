@@ -33,6 +33,7 @@ public class Placeholder {
 	public static final String DELETE_PLACEHOLDER_EXTENSION = ".S3.txt.delete"; //don't change this
 	public static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\.S3\\.txt.*");
 	private ArrayList<String> errorMessages = null;
+	private GSync gsync;
 	
 	/**Null for unset,  STANDARD, RESTORE, DELETE.*/
 	private String type = null;
@@ -47,9 +48,10 @@ public class Placeholder {
 	
 	public Placeholder() {};
 	
-	public Placeholder(File f, String keyDelete) throws IOException {
+	public Placeholder(File f, String keyDelete, GSync gsync) throws IOException {
 		attributes = Util.parseKeyValues(f);
 		placeHolderFile = f;
+		this.gsync = gsync;
 		//set type
 		if (f.getName().endsWith(PLACEHOLDER_EXTENSION)) type = TYPE_PLACEHOLDER;
 		else if (f.getName().endsWith(RESTORE_PLACEHOLDER_EXTENSION)) type = TYPE_RESTORE;
@@ -73,8 +75,8 @@ public class Placeholder {
 			placeHolderFile = f;
 		} catch (IOException e) {
 			f.delete();
-			System.err.println("\nFailed to write placeholder file for "+f);
-			e.printStackTrace();
+			gsync.e("\nFailed to write placeholder file for "+f);
+			gsync.e(Util.getStackTrace(e));
 			System.exit(0);
 		}
 		finally {

@@ -29,10 +29,13 @@ public class TestGSync {
 	/*Adjust these fields to match your testing environment	 */
 	
 	/**Be sure this bucket exists and doesn't contain anything you care about. WARNING, it will be emptied!*/
-	private static final String testS3BucketName = "hcibioinfo-gsync-test";
+	private static final String testS3BucketName = "hcibioinfo-gsync-test2";
 
 	/**Directory in the AwsApps project containing the GSync.zip file. MUST end with a / */
 	private static final String pathToTestData = "/Users/u0028003/Code/AwsApps/TestData/";
+	
+	/**Email address to send log info, must be an hci address given the default smpt server. */
+	private static final String email = "david.nix@hci.utah.edu";
 
 	/* No need to modify anything below */
 	
@@ -97,9 +100,12 @@ public class TestGSync {
 			gs.setMinGigaBytes(0.0005);
 			gs.setBucketName(testS3BucketName);
 			gs.setDryRun(false);
+			gs.setEmail(email);
 
 			//this fires the entire scan and upload but not delete local
 			gs.doWork();
+			gs.sendEmail();
+			System.err.println("\nCheck "+email+" for OK message ");
 
 			//check final
 			assertTrue(gs.isResultsCheckOK());
@@ -237,10 +243,13 @@ public class TestGSync {
 			gsp.setDryRun(false);
 			gsp.setVerbose(true);
 			gsp.setDeleteUploaded(true);
+			gsp.setEmail(email);
 			//trap exception
 			try {
 				gsp.doWork();
 			} catch (Exception e) {}
+			gsp.sendEmail();
+			System.err.println("\nCheck "+email+" for ERROR message");
 
 			//check that there are problems
 			assertFalse(gsp.isResultsCheckOK());
@@ -261,13 +270,13 @@ public class TestGSync {
 
 			//change the size in a placeholder
 			File pFile = new File(pathToTestData+filesForUpload[1]+ Placeholder.PLACEHOLDER_EXTENSION);
-			Placeholder ph = new Placeholder(pFile, pathToTestData);
+			Placeholder ph = new Placeholder(pFile, pathToTestData,gsp);
 			ph.getAttributes().put("size", "111");
 			ph.writePlaceholder(pFile);
 
 			//change the etag in a placeholder
 			File pFile2 = new File(pathToTestData+filesForUpload[3]+ Placeholder.PLACEHOLDER_EXTENSION);
-			Placeholder ph2 = new Placeholder(pFile2,pathToTestData);
+			Placeholder ph2 = new Placeholder(pFile2,pathToTestData,gsp);
 			ph2.getAttributes().put("etag", "badEtag");
 			ph2.writePlaceholder(pFile2);
 
@@ -534,7 +543,7 @@ public class TestGSync {
 			assertTrue(os.containsKey(destKey));
 			
 			//show the internal key in the moved placeholder has been updated
-			Placeholder updatedP = new Placeholder(dest, pathToTestData+"/GSync/");
+			Placeholder updatedP = new Placeholder(dest, pathToTestData+"/GSync/",gs);
 			assertTrue(updatedP.getAttribute("key").equals(destKey));
 			
 			//delete s3 object then attempt a move
