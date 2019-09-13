@@ -1,10 +1,10 @@
 # AwsApps
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app.
 <pre>
-java -jar -Xmx10G ~/Code/AwsApps/GSync_0.1.jar 
+MacBook-Pro-89:~ u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/GSync_0.2.jar 
 
 **************************************************************************************
-**                                  GSync : August 2019                             **
+**                                   GSync : Sept 2019                              **
 **************************************************************************************
 GSync pushes files with a particular extension that exceed a given size and age to 
 Amazon's S3 object store. Associated genomic index files are also moved. Once 
@@ -44,7 +44,7 @@ Required:
 -b Dediated S3 bucket name
 
 Optional:
--e File extensions to consider, comma delimited, no spaces, case sensitive. Defaults
+-f File extensions to consider, comma delimited, no spaces, case sensitive. Defaults
      to '.bam,.cram,.gz,.zip'
 -a Minimum days old for archiving, defaults to 60
 -g Minimum gigabyte size for archiving, defaults to 5
@@ -52,8 +52,12 @@ Optional:
 -k Delete local files that were successfully uploaded.
 -u Update S3 Object keys to match current placeholder paths, slow for large files.
 -v Verbose output
+-e Email address to send gsync messages.
+-s Smtp host, defaults to hci-mail.hci.utah.edu
+-x Execute every 3hrs until complete, defaults to just once, good for downloading
+    glacier objects.
 
-Example: java -Xmx10G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo 
-     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq
+Example: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo 
+     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov
 
 **************************************************************************************/pre>
