@@ -54,8 +54,8 @@ public class GSync {
 
 	//for looping till complete
 	private boolean rerunUntilComplete = false;
-	private int numMinToSleep = 180;
-	private int iterations = 20;
+	private int numMinToSleep = 60;
+	private int iterations = 72;
 	private boolean runAgain = false;
 
 	//internal fields
@@ -93,7 +93,8 @@ public class GSync {
 		//loop till done
 		while (iterations-- > 0) {
 			doWork();
-			if (dryRun == true || runAgain == false || resultsCheckOK == false || rerunUntilComplete == false) break;
+			if (resultsCheckOK == false) System.exit(1);
+			if (dryRun == true || runAgain == false || rerunUntilComplete == false) break;
 			else {
 				try {
 					pl("\nWaiting... "+iterations);
@@ -379,6 +380,7 @@ public class GSync {
 
 		//anything to upload?  all of these methods throw an IOException 
 		if (candidatesForUpload.size() !=0) {
+			long totalSize = 0;
 			int numUpload = candidatesForUpload.size();
 			pl("\nUploading "+numUpload+ " files...");
 			ArrayList<File> toDelete = new ArrayList<File>();
@@ -386,13 +388,16 @@ public class GSync {
 
 			for (String key: candidatesForUpload.keySet()) {
 				File toUpload = candidatesForUpload.get(key);
+				totalSize+= toUpload.length();
 				String etagData = upload(key, toUpload, tm, counter+"/"+numUpload);
 				toDelete.add(toUpload);
 				writePlaceholder(toUpload, etagData);
 				counter++;
 			}
 			//cannot reach this point if there was an error
-			pl("\tAll S3 uploads successfully completed.");
+			double numGb = (double)totalSize/ (double)1073741824;
+		
+			pl("\tAll S3 uploads ("+ Util.formatNumber(numGb, 2) +"GB) successfully completed.");
 			//delete
 			if (deleteUploaded) {
 				for (File x: toDelete) {
@@ -932,12 +937,12 @@ public class GSync {
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken.\n"+
 				"-k Delete local files that were successfully uploaded.\n"+
-				"-u Update S3 Object keys to match current placeholder paths, slow for large files.\n"+
-				"-v Verbose output\n"+
-				"-e Email address to send gsync messages.\n"+
+				"-u Update S3 Object keys to match current placeholder paths.\n"+
+				"-v Verbose output.\n"+
+				"-e Email addresses to send gsync messages, comma delimited, no spaces.\n"+
 				"-s Smtp host, defaults to hci-mail.hci.utah.edu\n"+
-				"-x Execute every 3hrs until complete, defaults to just once, good for downloading\n"+
-				"    glacier objects.\n"+
+				"-x Execute every hr until complete, defaults to just once, good for downloading\n"+
+				"    latent glacier objects.\n"+
 
 				"\nExample: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo \n"+
 				"     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov\n\n"+
