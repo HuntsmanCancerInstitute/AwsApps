@@ -42,7 +42,7 @@ public class GSync {
 	//user defined fields
 	private File[] dirsToScan = null;
 	private String bucketName = null;
-	private int minDaysOld = 60;
+	private int minDaysOld = 120;
 	private double minGigaBytes = 5;
 	private String[] fileExtensions = {".bam", ".cram",".gz", ".zip"};
 	private boolean dryRun = true;
@@ -933,7 +933,7 @@ public class GSync {
 				"\nOptional:\n" +
 				"-f File extensions to consider, comma delimited, no spaces, case sensitive. Defaults\n"+
 				"     to '.bam,.cram,.gz,.zip'\n" +
-				"-a Minimum days old for archiving, defaults to 60\n"+
+				"-a Minimum days old for archiving, defaults to 120\n"+
 				"-g Minimum gigabyte size for archiving, defaults to 5\n"+
 				"-r Perform a real run, defaults to just listing the actions that would be taken.\n"+
 				"-k Delete local files that were successfully uploaded.\n"+
