@@ -54,7 +54,7 @@ public class GSync {
 
 	//for looping till complete
 	private boolean rerunUntilComplete = false;
-	private int numMinToSleep = 60;
+	private int numMinToSleep = 360;
 	private int iterations = 72;
 	private boolean runAgain = false;
 
@@ -93,7 +93,10 @@ public class GSync {
 		//loop till done
 		while (iterations-- > 0) {
 			doWork();
-			if (resultsCheckOK == false) System.exit(1);
+			if (resultsCheckOK == false) {
+				System.err.println("\nError found, aborting.");
+				System.exit(1);
+			}
 			if (dryRun == true || runAgain == false || rerunUntilComplete == false) break;
 			else {
 				try {
@@ -587,7 +590,7 @@ public class GSync {
 						ok = false;
 						//check size
 						long pSize = Long.parseLong(p.getAttribute("size"));
-						if (pSize == local.length()) p.addErrorMessage("The local file already exists. Size matches. File looks as if it is already restored? Delete the restore placeholder?\n\t\trm -f "+ p.getPlaceHolderFile());
+						if (pSize == local.length()) p.addErrorMessage("The local file already exists. Size matches. File looks as if it is already restored? Rename the restore placeholder?\n\t\tmv "+ p.getPlaceHolderFile() +" "+p.getPlaceHolderFile().toString().replace(".restore", ""));
 						else p.addErrorMessage("The local file already exists. The sizes do not match! Suspect partial restore. Recommend deleting the local file.\n\t\trm -f "+p.getLocalFile());
 					}
 				}
@@ -941,7 +944,7 @@ public class GSync {
 				"-v Verbose output.\n"+
 				"-e Email addresses to send gsync messages, comma delimited, no spaces.\n"+
 				"-s Smtp host, defaults to hci-mail.hci.utah.edu\n"+
-				"-x Execute every hr until complete, defaults to just once, good for downloading\n"+
+				"-x Execute every 6 hrs until complete, defaults to just once, good for downloading\n"+
 				"    latent glacier objects.\n"+
 
 				"\nExample: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo \n"+
