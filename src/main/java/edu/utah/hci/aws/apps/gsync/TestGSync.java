@@ -20,7 +20,7 @@ import java.util.List;
  * 1) Create a bucket on S3 for just testing. It will be cleared.
  * 2) Create this file ~/.aws/credentials with your access, secret, and region info, chmod 600 the file and keep it private.
 		[default]
-		aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A
+		aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A  
 		aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
 		region = us-west-2	
  */
@@ -29,7 +29,7 @@ public class TestGSync {
 	/*Adjust these fields to match your testing environment	 */
 	
 	/**Be sure this bucket exists and doesn't contain anything you care about. WARNING, it will be emptied!*/
-	private static final String testS3BucketName = "hcibioinfo-gsync-test2";
+	private static final String testS3BucketName = "hcibioinfo-gsync-test";
 
 	/**Directory in the AwsApps project containing the GSync.zip file. MUST end with a / */
 	private static final String pathToTestData = "/Users/u0028003/Code/AwsApps/TestData/";
@@ -299,10 +299,9 @@ public class TestGSync {
 			//check that the missing S3 object is recorded
 			Placeholder notInS3 = gs2.getFailingPlaceholders().get(1);  
 			assertTrue(notInS3.getAttribute("key").equals(filesForUpload[0]));
-			
 
 			//check for an S3 object with no local placeholder or file
-			assertTrue(gs2.getS3KeyWithNoLocal().contains(filesForUpload[2]));
+			assertTrue(gs2.getS3KeyWithNoLocal().keySet().contains(filesForUpload[2]));
 
 			//check for incorrect size in placeholder
 			Placeholder size = gs2.getFailingPlaceholders().get(0);
@@ -318,6 +317,74 @@ public class TestGSync {
 			fail("Exception caught.");
 		}
 	}
+	
+	@Test
+	public void testPlaceholderFileRecreation() {
+		try {
+			setupLocalDir();
+			emptyS3Bucket();
+
+			//run uploads and delete local files
+			System.out.println("\nRun 1st time to upload datasets....");
+			GSync gs = new GSync();
+			gs.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs.setMinGigaBytes(0.0005);
+			gs.setBucketName(testS3BucketName);
+			gs.setDryRun(false);
+			gs.setDeleteUploaded(true);
+			gs.doWork();
+			assertTrue(gs.isResultsCheckOK());
+
+			//delete a placeholder
+			File pFile = new File(pathToTestData+filesForUpload[4]+Placeholder.PLACEHOLDER_EXTENSION);
+			pFile.delete();
+			assertFalse(pFile.exists());
+
+			//run a second time, this will stop work after finding the missing placeholder
+			System.out.println("\nRunning 2rd time with missing placeholder....");
+			GSync gsp = new GSync();
+			gsp.setLocalDir(new File(pathToTestData+"/GSync"));
+			gsp.setMinGigaBytes(0.0005);
+			gsp.setBucketName(testS3BucketName);
+			gsp.setDryRun(false);
+			gsp.setVerbose(true);
+			gsp.setDeleteUploaded(true);
+			gsp.setEmail(email);
+			//trap exception
+			try {
+				gsp.doWork();
+			} catch (Exception e) {}
+			gsp.sendEmail();
+			System.err.println("\nCheck "+email+" for ERROR message");
+
+			//check that there are problems due to the missing file
+			assertFalse(gsp.isResultsCheckOK());
+			assertTrue(gsp.getS3KeyWithNoLocal().size() == 1);
+
+			//run a third time and indicate a placeholder file restore
+			System.out.println("\nRunning 3rd time....");
+			GSync gs2 = new GSync();
+			gs2.setLocalDir(new File(pathToTestData+"/GSync"));
+			gs2.setMinGigaBytes(0.0005);
+			gs2.setBucketName(testS3BucketName);
+			gs2.setDryRun(false);
+			gs2.setVerbose(true);
+			gs2.setDeleteUploaded(true);
+			gs2.setRestorePlaceholderFiles(true);
+			gs2.doWork();
+			
+			//check that there are problems
+			assertTrue(pFile.exists());
+			assertTrue(gs2.isResultsCheckOK());
+			
+
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+			e.printStackTrace();
+			fail("Exception caught.");
+		}
+	}
+
 
 	@Test
 	public void testRestore() {

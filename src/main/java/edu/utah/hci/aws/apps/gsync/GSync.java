@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +50,7 @@ public class GSync {
 	private boolean verbose = false;
 	private boolean deleteUploaded = false;
 	private boolean updateS3Keys = false;
+	private boolean restorePlaceholderFiles = false;  //not implemented
 	private String smtpHost = "hci-mail.hci.utah.edu";
 	private String email = null;
 
@@ -77,7 +79,8 @@ public class GSync {
 	private ArrayList<File> localFileAlreadyUploaded = new ArrayList<File>();
 	private ArrayList<File> localFileAlreadyUploadedButDiffSize = new ArrayList<File>();
 	private ArrayList<File> localFileAlreadyUploadedNoPlaceholder = new ArrayList<File>();
-	private ArrayList<String> s3KeyWithNoLocal = new ArrayList<String>();
+	//private ArrayList<String> s3KeyWithNoLocal = new ArrayList<String>();
+	private LinkedHashMap<String, S3ObjectSummary> s3KeyWithNoLocal = new LinkedHashMap<String, S3ObjectSummary>();
 
 	//ready for restore or delete
 	private ArrayList<Placeholder> restorePlaceholders = new ArrayList<Placeholder>();
@@ -105,11 +108,11 @@ public class GSync {
 				} catch (InterruptedException e) {}
 			}
 		}
-		
+
 
 		double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
 		pl("\nDone! "+Math.round(diffTime)+" minutes\n");
-		
+
 		sendEmail();
 	}
 
@@ -154,11 +157,11 @@ public class GSync {
 				}
 			}
 			if (s3 != null) s3.shutdown();
-			
+
 		} catch (Exception ex) {
 			if (s3 != null) s3.shutdown();
-			if (verbose) e(Util.getStackTrace(ex));
-			else e(ex.getMessage());
+			if (verbose) el(Util.getStackTrace(ex));
+			else el(ex.getMessage());
 			resultsCheckOK = false;
 		} 
 	}
@@ -174,7 +177,8 @@ public class GSync {
 		localFileAlreadyUploaded = new ArrayList<File>();
 		localFileAlreadyUploadedButDiffSize = new ArrayList<File>();
 		localFileAlreadyUploadedNoPlaceholder = new ArrayList<File>();
-		s3KeyWithNoLocal = new ArrayList<String>();
+		//s3KeyWithNoLocal = new ArrayList<String>();
+		s3KeyWithNoLocal = new LinkedHashMap<String, S3ObjectSummary>();
 		restorePlaceholders = new ArrayList<Placeholder>();
 		deletePlaceholders = new ArrayList<Placeholder>();
 	}
@@ -233,8 +237,8 @@ public class GSync {
 
 		} catch (Exception e) {
 			error = "ERROR in updating keys for:\n"+working.getMinimalInfo()+"\n"+e.getMessage();
-			e(error);
-			if (verbose) e(Util.getStackTrace(e));
+			el(error);
+			if (verbose) el(Util.getStackTrace(e));
 			if (s3 != null) s3.shutdown();
 		} 
 
@@ -260,16 +264,16 @@ public class GSync {
 		pl("\t"+deletePlaceholders.size()+" AWS and local resources deleted (versioned S3 objects can still be recovered)");
 		s3.shutdown();
 	}
-	
+
 	void sendEmail() {
 		if (email == null) return;
-		 try {
+		try {
 			String status = " - OK - ";
 			if (resultsCheckOK == false) status = " - ERROR - ";
 			Util.postMail(email, "GSync Run" +status+ Util.getDateTime(), log.toString(), "noreply_gsync@hci.utah.edu", smtpHost);
 		} catch (MessagingException e) {
-			e("\nError sending email");
-			e(Util.getStackTrace(e));
+			el("\nError sending email");
+			el(Util.getStackTrace(e));
 			System.exit(1);
 		}
 	}
@@ -326,7 +330,7 @@ public class GSync {
 			tm.shutdownNow();
 
 			//return the error
-			if (verbose) e(Util.getStackTrace(e));
+			if (verbose) el(Util.getStackTrace(e));
 			return "\nRESTORE ERROR: "+e.getMessage();
 		} 
 
@@ -399,7 +403,7 @@ public class GSync {
 			}
 			//cannot reach this point if there was an error
 			double numGb = (double)totalSize/ (double)1073741824;
-		
+
 			pl("\tAll S3 uploads ("+ Util.formatNumber(numGb, 2) +"GB) successfully completed.");
 			//delete
 			if (deleteUploaded) {
@@ -425,6 +429,18 @@ public class GSync {
 		att.put("size", new Long(f.length()).toString());
 		File p = new File(f.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
 		placeholder.writePlaceholder(p);
+	}
+
+	private File writePlaceholder(File f, S3ObjectSummary os) throws IOException {
+		Placeholder placeholder = new Placeholder();
+		HashMap<String, String> att = placeholder.getAttributes();
+		att.put("bucket", bucketName);
+		att.put("key", os.getKey());
+		att.put("etag", os.getETag());
+		att.put("size", new Long(os.getSize()).toString());
+		File p = new File(f.getCanonicalPath()+Placeholder.PLACEHOLDER_EXTENSION);
+		placeholder.writePlaceholder(p);
+		return  p;
 	}
 
 	/**Looks for files with bam, cram, and gz and their indexes bai, crai, tbi.
@@ -509,12 +525,26 @@ public class GSync {
 
 		//s3 keys
 		if (s3KeyWithNoLocal.size() != 0) {
-			pl("\nThe following are s3 objects with no local placeholder file. Was it deleted? Consider deleting the S3 Object?");
-			for (String f: s3KeyWithNoLocal) pl("\t"+f);
-			resultsCheckOK = false;
+			//just warn?
+			if (restorePlaceholderFiles  ==  false ) {
+				pl("\nThe following are S3 objects with no local placeholder file. Deleted? Consider deleting the S3 Object or recreating the placeholder with the -c option. Address and restart.");
+				for (String f: s3KeyWithNoLocal.keySet()) pl("\t"+f+"\t"+s3KeyWithNoLocal.get(f).getSize());
+				resultsCheckOK = false;
+			}
+			//not a dry run?
+			else if (dryRun  == false){
+				pl("\nThe following are s3 objects with no local placeholder file. Attempting to recreate each...");
+				boolean restored = restorePlaceholders(s3KeyWithNoLocal);
+				if (restored) pl("\t\tAll placeholders recreated.");
+				else {
+					el("\t\tProblems encountered with recreating placeholder file(s).  Address and restart.");
+					resultsCheckOK = false;
+				}
+			}
 		}
 		else if (verbose) pl("\nNo S3 objects were found that lacked local placeholder references.");
 
+		//All OK?
 		if (resultsCheckOK) {
 
 			//ready for upload
@@ -553,8 +583,48 @@ public class GSync {
 
 	}
 
+	/*Not tested!*/
+	private boolean restorePlaceholders(LinkedHashMap<String, S3ObjectSummary> s3KeyWithNoLocal2) throws IOException {
+		if (restorePlaceholderFiles == false) return false;
+		// Need to build a placeholder file using the s3 object and write it to the appropriate place
+		//string PatientAnalysis/Avatar/AJobs/1100529/Alignment/1100529_TumorRNA/Bam/1100529_TumorRNA_Hg38.bai
 
+		for (String key: s3KeyWithNoLocal2.keySet() ) {
+			S3ObjectSummary os = s3KeyWithNoLocal2.get(key);
 
+			//check if file exists, doesn't have to but if it does want to check the size
+			File f = new File(deleteFromKey+key);
+
+			if (f.exists()) {
+				//check size
+				long size = os.getSize();
+				if (size != f.length()) {
+					pl("\tFailed, existing file size ("+ f.length()+ ") differs from S3 Object ("+ size+ ") for "+f+" Either delete the local file or the S3 object.");
+					return false;
+				}
+			}
+
+			//check that the parent dir exists, it must
+			File dir= f.getParentFile();
+			if (dir.exists() == false) {
+				pl("\tFailed, the parent directory does not exist, create it and restart ' mkdir -pv "+ dir+ " '");
+				return false;
+			}
+
+			//check bucket, should never get this incorrect
+			if (os.getBucketName().equals(bucketName) == false) {
+				pl ("\tFailed, different bucket names for "+f+" S3: "+os.getBucketName()+" vs "+bucketName);
+				return false;
+			}
+
+			//write the placeholder
+			File p = writePlaceholder(f, os);
+			pl("\t"+p+" recreated");
+		}
+
+		return true;
+
+	}
 
 	private void checkPlaceholders() throws IOException {
 
@@ -622,7 +692,7 @@ public class GSync {
 		System.out.print(s);
 		log.append(s);
 	}
-	void e(String s) {
+	void el(String s) {
 		System.err.println(s);
 		log.append(s);
 	}
@@ -665,7 +735,8 @@ public class GSync {
 
 			else if (os.getSize() != 0) {
 				//OK, this is an unknown s3 object with no local reference
-				s3KeyWithNoLocal.add(key);
+				//s3KeyWithNoLocal.add(key);
+				s3KeyWithNoLocal.put(key, os);
 			}
 		});
 		s3.shutdown();
@@ -801,6 +872,7 @@ public class GSync {
 						case 'r': dryRun = false; break;
 						case 'v': verbose = true; break;
 						case 'u': updateS3Keys = true; break;
+						case 'c': restorePlaceholderFiles = true; break;
 						case 'k': deleteUploaded = true; break;
 						case 'x': rerunUntilComplete = true; break;
 						case 'h': printDocs(); System.exit(0);
@@ -815,7 +887,7 @@ public class GSync {
 
 			//create dirs
 			if (dirString == null) {
-				e("\nError: please provide one or more directories to sync with S3, comma delimited, no spaces, relative path.\n");
+				el("\nError: please provide one or more directories to sync with S3, comma delimited, no spaces, relative path.\n");
 				System.exit(1);
 			}
 
@@ -823,16 +895,22 @@ public class GSync {
 
 			//check bucket
 			if (bucketName == null) {
-				e("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
+				el("\nError: please provide the name of a dedicated GSync AWS S3 bucket.\n");
 				System.exit(1);
 			}
-			if (dryRun) deleteUploaded = false;
+			if (dryRun) {
+				deleteUploaded = false;
+				if (restorePlaceholderFiles) {
+					el("\nCannot restore placeholders with -c when performing a dry run.");
+					System.exit(1);
+				}
+			}
 
 			printOptions();
 
 		} catch (Exception e) {
-			e("\nError processing arguments");
-			e(Util.getStackTrace(e));
+			el("\nError processing arguments");
+			el(Util.getStackTrace(e));
 			System.exit(1);
 		}
 	}	
@@ -884,6 +962,7 @@ public class GSync {
 		pl("  -g Min file GB               : "+ minGigaBytes);
 		pl("  -r Dry run                   : "+ dryRun);
 		pl("  -u Update S3 keys            : "+ updateS3Keys);
+		pl("  -c Recreate placeholders     : "+ restorePlaceholderFiles);
 		pl("  -v Verbose output            : "+ verbose);
 		pl("  -e Email                     : "+ email);
 		pl("  -s Smtp host                 : "+ smtpHost);
@@ -894,7 +973,7 @@ public class GSync {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   GSync : Sept 2019                              **\n" +
+				"**                                   GSync : Jan 2020                               **\n" +
 				"**************************************************************************************\n" +
 				"GSync pushes files with a particular extension that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
@@ -941,6 +1020,7 @@ public class GSync {
 				"-r Perform a real run, defaults to just listing the actions that would be taken.\n"+
 				"-k Delete local files that were successfully uploaded.\n"+
 				"-u Update S3 Object keys to match current placeholder paths.\n"+
+				"-c Recreate deleted placeholder files using info from orphaned S3 Objects.\n"+
 				"-v Verbose output.\n"+
 				"-e Email addresses to send gsync messages, comma delimited, no spaces.\n"+
 				"-s Smtp host, defaults to hci-mail.hci.utah.edu\n"+
@@ -1021,7 +1101,7 @@ public class GSync {
 	}
 
 
-	public ArrayList<String> getS3KeyWithNoLocal() {
+	public LinkedHashMap<String, S3ObjectSummary> getS3KeyWithNoLocal() {
 		return s3KeyWithNoLocal;
 	}
 
@@ -1041,6 +1121,10 @@ public class GSync {
 
 	public void setEmail(String email) {
 		this.email = email;
+	}
+
+	public void setRestorePlaceholderFiles(boolean restorePlaceholderFiles) {
+		this.restorePlaceholderFiles = restorePlaceholderFiles;
 	}
 
 }

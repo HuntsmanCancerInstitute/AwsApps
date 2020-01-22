@@ -75,8 +75,8 @@ public class Placeholder {
 			placeHolderFile = f;
 		} catch (IOException e) {
 			f.delete();
-			gsync.e("\nFailed to write placeholder file for "+f);
-			gsync.e(Util.getStackTrace(e));
+			gsync.el("\nFailed to write placeholder file for "+f);
+			gsync.el(Util.getStackTrace(e));
 			System.exit(0);
 		}
 		finally {
