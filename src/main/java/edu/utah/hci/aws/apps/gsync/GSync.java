@@ -988,11 +988,11 @@ public class GSync {
 
 				"\nTo use the app:\n"+ 
 				"1) Create a new S3 bucket dedicated solely to this purpose. Use it for nothing else.\n"+
-				"2) Enable S3 Object Versioning on the bucket to assist in preventing \n"+
+				"2) Enable S3 Object Locking and Versioning on the bucket to assist in preventing \n"+
 				"   accidental object overwriting. Add lifecycle rules to\n"+
 				"   AbortIncompleteMultipartUpload and move objects to Deep Glacier.\n"+
 				"3) It is a good policy when working on AWS S3 to limit your ability to accidentally\n"+
-				"   delete buckets and objects. To do so, create and add yourself to an AWS Group \n"+
+				"   delete buckets and objects. To do so, create and assign yourself to an AWS Group \n"+
 				"   called AllExceptS3Delete with a custom permission policy that denies s3:Delete*:\n"+
 				"   {\"Version\": \"2012-10-17\", \"Statement\": [\n" + 
 				"      {\"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"},\n" + 
@@ -1000,6 +1000,7 @@ public class GSync {
 				"   For standard upload and download gsyncs, assign yourself to the AllExceptS3Delete\n"+
 				"   group. When you need to delete objects or buckets, switch to the Admin group, then\n"+
 				"   switch back. Accidental overwrites are OK since object versioning is enabled.\n"+
+				"   To add another layer of protection, apply object legal locks via the aws cli.\n"+
 				"3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
 				"   600 the file and keep it private. Use a txt editor or the aws cli configure\n"+
 				"   command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:\n"+

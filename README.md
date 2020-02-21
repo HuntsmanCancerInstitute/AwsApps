@@ -19,11 +19,11 @@ function.
 
 To use the app:
 1) Create a new S3 bucket dedicated solely to this purpose. Use it for nothing else.
-2) Enable S3 Object Versioning on the bucket to assist in preventing 
+2) Enable S3 Object Locking and Versioning on the bucket to assist in preventing 
    accidental object overwriting. Add lifecycle rules to
    AbortIncompleteMultipartUpload and move objects to Deep Glacier.
 3) It is a good policy when working on AWS S3 to limit your ability to accidentally
-   delete buckets and objects. To do so, create and add yourself to an AWS Group 
+   delete buckets and objects. To do so, create and assign yourself to an AWS Group 
    called AllExceptS3Delete with a custom permission policy that denies s3:Delete*:
    {"Version": "2012-10-17", "Statement": [
       {"Effect": "Allow", "Action": "*", "Resource": "*"},
@@ -31,6 +31,7 @@ To use the app:
    For standard upload and download gsyncs, assign yourself to the AllExceptS3Delete
    group. When you need to delete objects or buckets, switch to the Admin group, then
    switch back. Accidental overwrites are OK since object versioning is enabled.
+   To add another layer of protection, apply object legal locks via the aws cli.
 3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod
    600 the file and keep it private. Use a txt editor or the aws cli configure
    command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:
@@ -71,4 +72,5 @@ Optional:
 Example: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo 
      -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov
 
-**************************************************************************************/pre>
+**************************************************************************************
+</pre>
