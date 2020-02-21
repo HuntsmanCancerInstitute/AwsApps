@@ -384,7 +384,7 @@ public class GSync {
 	private void upload() throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartUploadThreshold((long) (256 * 1024 * 1024)).build();
-
+	
 		//anything to upload?  all of these methods throw an IOException 
 		if (candidatesForUpload.size() !=0) {
 			long totalSize = 0;
@@ -973,7 +973,7 @@ public class GSync {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   GSync : Jan 2020                               **\n" +
+				"**                                   GSync : Feb 2020                               **\n" +
 				"**************************************************************************************\n" +
 				"GSync pushes files with a particular extension that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
@@ -988,8 +988,18 @@ public class GSync {
 
 				"\nTo use the app:\n"+ 
 				"1) Create a new S3 bucket dedicated solely to this purpose. Use it for nothing else.\n"+
-				"2) Enable S3 Object Versioning on the bucket to prevent accidental deletion and\n"+
-				"   create an AbortIncompleteMultipartUpload lifecycle rule to delete partial uploads.\n"+
+				"2) Enable S3 Object Versioning on the bucket to assist in preventing \n"+
+				"   accidental object overwriting. Add lifecycle rules to\n"+
+				"   AbortIncompleteMultipartUpload and move objects to Deep Glacier.\n"+
+				"3) It is a good policy when working on AWS S3 to limit your ability to accidentally\n"+
+				"   delete buckets and objects. To do so, create and add yourself to an AWS Group \n"+
+				"   called AllExceptS3Delete with a custom permission policy that denies s3:Delete*:\n"+
+				"   {\"Version\": \"2012-10-17\", \"Statement\": [\n" + 
+				"      {\"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"},\n" + 
+				"      {\"Effect\": \"Deny\", \"Action\": \"s3:Delete*\", \"Resource\": \"*\"} ]}\n"+ 
+				"   For standard upload and download gsyncs, assign yourself to the AllExceptS3Delete\n"+
+				"   group. When you need to delete objects or buckets, switch to the Admin group, then\n"+
+				"   switch back. Accidental overwrites are OK since object versioning is enabled.\n"+
 				"3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
 				"   600 the file and keep it private. Use a txt editor or the aws cli configure\n"+
 				"   command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:\n"+
@@ -1003,14 +1013,14 @@ public class GSync {
 				"   xxx"+Placeholder.RESTORE_PLACEHOLDER_EXTENSION+ " and run GSync.\n"+
 				"6) To delete an S3 archived file, it's placeholder, and any local files, rename the \n"+
 				"   placeholder xxx"+Placeholder.DELETE_PLACEHOLDER_EXTENSION+" and run GSync.\n"+
-				"   Versioned copies on S3 will not be deleted. Use the S3 Console to do so.\n"+
+				"   Before executing, switch the GSync/AWS user to the Admin group.\n"+
 				"7) Placeholder files may be moved, see -u\n"+ 
 
 				"\nRequired:\n"+
 				"-d One or more local directories with the same parent to sync. This parent dir\n"+
 				"     becomes the base key in S3, e.g. BucketName/Parent/.... Comma delimited, no\n"+
 				"     spaces, see the example.\n"+
-				"-b Dediated S3 bucket name\n"+
+				"-b Dedicated S3 bucket name\n"+
 
 				"\nOptional:\n" +
 				"-f File extensions to consider, comma delimited, no spaces, case sensitive. Defaults\n"+
