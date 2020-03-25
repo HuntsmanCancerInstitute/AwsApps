@@ -227,8 +227,12 @@ public class GSync {
 				//delete the original reference
 				s3.deleteObject(bucketName, oldKey);
 
+				//fetch meta data on new object
+				ObjectMetadata newOmd = s3.getObjectMetadata(bucketName, newKey);
+				
 				//update placeholder file
 				p.getAttributes().put("key", newKey);
+				p.getAttributes().put("etag", newOmd.getETag()); //the etag will change since the number of threads to transfer likely differ.
 				p.writePlaceholder(p.getPlaceHolderFile());
 				numUpdated++;
 			}
