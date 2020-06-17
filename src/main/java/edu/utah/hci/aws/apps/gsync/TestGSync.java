@@ -34,8 +34,9 @@ public class TestGSync {
 	/**Directory in the AwsApps project containing the GSync.zip file. MUST end with a / */
 	private static final String pathToTestData = "/Users/u0028003/Code/AwsApps/TestData/";
 	
-	/**Email address to send log info, must be an hci address given the default smpt server. */
-	private static final String email = "david.nix@hci.utah.edu";
+	/**Email address to send log info, must be an hci address given the default smpt server, set to null to skip messages. */
+	//private static final String email = "david.nix@hci.utah.edu";
+	private static final String email = null;
 
 	/* No need to modify anything below */
 	
@@ -597,7 +598,7 @@ public class TestGSync {
 				gs.doWork();
 			} catch (Exception e) {}
 			
-			assertFalse(gs.isResultsCheckOK());
+			assertTrue(gs.isResultsCheckOK());
 			
 			//show the ori is gone, the dest is pres at file system and S3 system levels
 			HashMap<String, S3ObjectSummary> os = fetchS3Objects();

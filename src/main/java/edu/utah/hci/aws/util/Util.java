@@ -125,7 +125,7 @@ public class Util {
 	public static String getStackTrace (Throwable t) {
 		StringWriter sw = new StringWriter();
 		t.printStackTrace(new PrintWriter(sw));
-		return sw.toString();
+		return t.getMessage()+"\n"+sw.toString();
 	}
 	
 	/**Prints message to screen, then exits.*/

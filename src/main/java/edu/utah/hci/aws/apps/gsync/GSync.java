@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.mail.MessagingException;
@@ -20,8 +21,10 @@ import com.amazonaws.services.s3.model.RestoreObjectRequest;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.SdkClientException;
 import com.amazonaws.services.s3.transfer.Copy;
 import com.amazonaws.services.s3.transfer.Download;
+import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
@@ -47,12 +50,14 @@ public class GSync {
 	private double minGigaBytes = 5;
 	private String[] fileExtensions = {".bam", ".cram",".gz", ".zip"};
 	private boolean dryRun = true;
-	private boolean verbose = false;
+	private boolean verbose = true;
 	private boolean deleteUploaded = false;
 	private boolean updateS3Keys = false;
 	private boolean restorePlaceholderFiles = false;  //not implemented
 	private String smtpHost = "hci-mail.hci.utah.edu";
 	private String email = null;
+	private int maxTries = 3;
+	private int minToWait = 2;
 
 	//for looping till complete
 	private boolean rerunUntilComplete = false;
@@ -97,7 +102,7 @@ public class GSync {
 		while (iterations-- > 0) {
 			doWork();
 			if (resultsCheckOK == false) {
-				System.err.println("\nError found, aborting.");
+				System.err.println("\nResults check failed, error found, aborting.");
 				System.exit(1);
 			}
 			if (dryRun == true || runAgain == false || rerunUntilComplete == false) break;
@@ -126,9 +131,10 @@ public class GSync {
 
 			parsePlaceholderFiles();
 			if (resultsCheckOK == false) {
-				if (updateS3Keys && keyPlaceholderToUpdate.size() != 0) {
+				if (updateS3Keys && keyPlaceholderToUpdate.size() != 0 && dryRun == false) {
 					String error = updateKeys();
 					if (error != null) throw new Exception(error);
+					else resultsCheckOK = true;
 				}
 				return;
 			}
@@ -177,7 +183,6 @@ public class GSync {
 		localFileAlreadyUploaded = new ArrayList<File>();
 		localFileAlreadyUploadedButDiffSize = new ArrayList<File>();
 		localFileAlreadyUploadedNoPlaceholder = new ArrayList<File>();
-		//s3KeyWithNoLocal = new ArrayList<String>();
 		s3KeyWithNoLocal = new LinkedHashMap<String, S3ObjectSummary>();
 		restorePlaceholders = new ArrayList<Placeholder>();
 		deletePlaceholders = new ArrayList<Placeholder>();
@@ -208,27 +213,27 @@ public class GSync {
 				pl("\t"+oldKey +" -> "+newKey);
 
 				//check if old key exists
-				if (s3.doesObjectExist(bucketName, oldKey) == false) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". Original key doesn't exist.");
+				if (tryDoesObjectExist(bucketName, oldKey) == false) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". Original key doesn't exist.");
 
 				//check storage class, may need to trigger a pull from glacier to S3.
-				ObjectMetadata omd = s3.getObjectMetadata(bucketName, oldKey);
+				ObjectMetadata omd = tryGetObjectMetadata(bucketName, oldKey);
 
 				boolean ready = true;
 				String sc = omd.getStorageClass();
-				if ( sc != null) ready = requestArchiveRestore(oldKey, s3);
+				if ( sc != null) ready = requestArchiveRestore(oldKey);
 				if (ready == false) continue;
 
 				//check if new key already exists
-				if (s3.doesObjectExist(bucketName, newKey)) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". It already exists.");
+				if (tryDoesObjectExist(bucketName, newKey)) throw new IOException ("Failed to update key "+oldKey+" to "+newKey+". It already exists.");
 
 				//copy object to new location
-				copyObject(oldKey, newKey);
+				tryCopyObject(oldKey, newKey);
 
 				//delete the original reference
-				s3.deleteObject(bucketName, oldKey);
+				tryDeleteObject(bucketName, oldKey);
 
 				//fetch meta data on new object
-				ObjectMetadata newOmd = s3.getObjectMetadata(bucketName, newKey);
+				ObjectMetadata newOmd = tryGetObjectMetadata(bucketName, newKey);
 				
 				//update placeholder file
 				p.getAttributes().put("key", newKey);
@@ -248,20 +253,111 @@ public class GSync {
 
 		return error;
 	}
-
-	private void copyObject(String sourceObjectKey, String destObjectKey) throws Exception{
-		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
-		TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartCopyThreshold((long) (256 * 1024 * 1024)).build();
-		Copy copy = tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey);
-		copy.waitForCompletion();
+	
+	/**Attempts 's3.deleteObject(bucketName, key)' maxTries before throwing error message*/
+	private void tryDeleteObject(String bucketName, String key) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				s3.deleteObject(bucketName, key);
+				return;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 's3.deleteObject(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 's3.deleteObject(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed to delete "+key+" from "+bucketName+" S3 error message:\n"+error);
 	}
+	
+	/**Attempts 's3.doesObjectExist(bucketName, key)' maxTries before throwing error message*/
+	private ObjectMetadata tryGetObjectMetadata(String bucketName, String key) throws IOException {		
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				return s3.getObjectMetadata(bucketName, key);
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 's3.getObjectMetadata(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 's3.getObjectMetadata(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed to fetch ObjectMedaData for "+key+" in "+bucketName+" S3 error message:\n"+error);
+	}
+
+	/**Attempts 's3.doesObjectExist(bucketName, key)' maxTries before throwing error message*/
+	private boolean tryDoesObjectExist(String bucketName, String key) throws IOException {		
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				return s3.doesObjectExist(bucketName, key);
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 's3.doesObjectExist(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 's3.doesObjectExist(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR looking for "+key+" in "+bucketName+" S3 error message:\n"+error);
+	}
+	
+	private void sleep(String message) {
+		try {
+			pl(message+", sleeping "+minToWait+" minutes");
+			TimeUnit.MINUTES.sleep(minToWait);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	/**Attempts 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' maxTries before throwing error message*/
+	private void tryCopyObject(String sourceObjectKey, String destObjectKey) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				TransferManager tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartCopyThreshold((long) (256 * 1024 * 1024)).build();
+				Copy copy = tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey);
+				copy.waitForCompletion();
+				return;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' trying again, "+attempt);
+			}
+			catch ( InterruptedException ie) {
+				error = Util.getStackTrace(ie);
+				sleep("\tWARNING: failed 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed tm.copy("+bucketName+", "+sourceObjectKey+", "+bucketName+", "+destObjectKey+") S3 error message:\n"+error);
+	}
+
 
 	private void delete() throws Exception{
 		pl("\nDeleting S3 Objects, their delete placeholders, and any matching local files...");
 		s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 		for (Placeholder p : deletePlaceholders) {
 			pl("\t"+p.getAttribute("key")+"\t"+p.getPlaceHolderFile()+"\t"+p.getLocalFile()+"\t"+p.getStorageClass());
-			s3.deleteObject(bucketName, p.getAttribute("key"));
+			tryDeleteObject(bucketName, p.getAttribute("key"));
 			p.getPlaceHolderFile().delete();
 			if (p.getLocalFile() != null) p.getLocalFile().delete();
 		}
@@ -299,7 +395,7 @@ public class GSync {
 
 				//check storage class, may need to trigger a pull from glacier to S3.
 				boolean download = true;
-				if (p.getStorageClass().equals("STANDARD") == false) download = requestArchiveRestore(key, s3);
+				if (p.getStorageClass().equals("STANDARD") == false) download = requestArchiveRestore(key);
 
 				//good to go?
 				if (download) {
@@ -307,7 +403,7 @@ public class GSync {
 					localFile = p.getLocalFile();
 					tempFile = new File(localFile.getParentFile(), "tempRestore_"+localFile.getName());
 
-					downloadFile(tm, bucketName, key, tempFile, false) ;
+					tryDownload(bucketName, key, tempFile, tm);
 
 					//check the size
 					long placeholderSize = Long.parseLong(p.getAttribute("size"));
@@ -341,24 +437,43 @@ public class GSync {
 		pl("\t"+numRestored+" resources restored");
 		return "";
 	}
-
-	public static void downloadFile(TransferManager tm, String bucket_name, String key_name, File f, boolean pause) throws Exception {
-		Download xfer = tm.download(bucket_name, key_name, f);
-		xfer.waitForCompletion();
+	
+	/**Attempts 'tm.download(bucketName, key)' maxTries before throwing error message*/
+	private void tryDownload(String bucketName, String key, File tempFile, TransferManager tm) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				Download xfer = tm.download(bucketName, key, tempFile);
+				xfer.waitForCompletion();
+				return;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			}
+			catch ( InterruptedException ie) {
+				error = Util.getStackTrace(ie);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed tm.download("+bucketName+", "+key+") S3 error message:\n"+error);
 	}
 
 
-
-	public boolean requestArchiveRestore(String key, AmazonS3 s3Client) throws IOException {
+	public boolean requestArchiveRestore(String key) throws IOException {
+		
 		//check if restore in progress
-		ObjectMetadata response = s3Client.getObjectMetadata(bucketName, key);
+		ObjectMetadata response = tryGetObjectMetadata(bucketName, key);
 		Boolean restoreFlag = response.getOngoingRestore();
 		//request never received
 		if (restoreFlag == null) {
+			tryRestoreObjectV2(bucketName, key);
 			pl("\t\t"+response.getStorageClass()+" restore request placed, relaunch GSync in a few hours.");
-			// Create and submit a request to restore an object from Glacier to S3 for xxx days.
-			RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, DAYS_IN_S3);
-			s3Client.restoreObjectV2(requestRestore);
 		}
 		//true, in progress
 		else if (restoreFlag == true) pl("\t\t"+response.getStorageClass()+" restore in progress, relaunch GSync in a few hours.");
@@ -368,6 +483,25 @@ public class GSync {
 		runAgain = true;
 		return false;
 	}
+	
+	/**Attempts 'ts3.restoreObjectV2()' maxTries before throwing error message*/
+	private void tryRestoreObjectV2(String bucketName, String key) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, DAYS_IN_S3);
+				s3.restoreObjectV2(requestRestore);
+				return;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' trying again, "+attempt);
+			}
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed send a s3.restoreObjectV2 ("+bucketName+", "+key+") S3 error message:\n"+error);
+	}
+
 
 
 	private void deleteAlreadyUploaded() throws IOException {
@@ -472,20 +606,50 @@ public class GSync {
 
 	}
 
-	private String upload(String key, File file, TransferManager tm, String prePend) throws AmazonServiceException, AmazonClientException, IOException, InterruptedException {
+	private String upload(String key, File file, TransferManager tm, String prePend) throws IOException {
 		long startTime = System.currentTimeMillis();
-
+		
 		p("\t"+prePend+"\t"+bucketName+"/"+key+"\t");
-		Upload u = tm.upload(bucketName, key, file);
-		//Util.showTransferProgress(u);
-		if (Util.waitForCompletion(u) == false) throw new IOException("Failed S3 upload "+file);
-
+		String eTag = tryUpload(bucketName, key, file, tm);
+		
 		//calc time
 		double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
 		pl(Util.formatNumber(diffTime, 1)+" min");
 
-		return u.waitForUploadResult().getETag();
+		return eTag;
 	}
+	
+	/**Attempts 'tm.upload(bucketName, key, file)' maxTries before throwing error message*/
+	private String tryUpload(String bucketName, String key, File file, TransferManager tm) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				Upload u = tm.upload(bucketName, key, file);
+				u.waitForCompletion();
+				String etag = null;
+		        if (u.getState().equals(Transfer.TransferState.Completed)) {
+		        	etag = u.waitForUploadResult().getETag();
+		        }
+		        if (etag == null) throw new IOException("ERROR failed tm.upload("+bucketName+", "+key+", "+file+")");
+		        return etag;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 'tm.upload(bucketName, key, file)' trying again, "+attempt);
+			}
+			catch ( InterruptedException ie) {
+				error = Util.getStackTrace(ie);
+				sleep("\tWARNING: failed 'tm.upload(bucketName, key, file)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 'tm.upload(bucketName, key, file)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed tm.upload("+bucketName+", "+key+", "+file+") S3 error message:\n"+error);
+	}
+
 
 	private void removeLocalFromUploadCandidates() throws IOException {
 		// remove localFileAlreadyUploaded from candidatesForUpload
@@ -766,7 +930,7 @@ public class GSync {
 
 			}
 			else {
-				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so attempt a fix by running GSync with the -u option." );
+				p.addErrorMessage("The current file path does not match S3 key path. Was this placeholder file moved? If so attempt a fix by running GSync with the -u -r option." );
 				failingPlaceholders.add(p);
 				keyPlaceholderToUpdate.put(key, p);
 			}
@@ -774,7 +938,7 @@ public class GSync {
 		//any failing paths?
 		if (failingPlaceholders.size() !=0) {
 			//is it just key mismatches and they want to update them
-			if (failingPlaceholders.size() != keyPlaceholderToUpdate.size() || updateS3Keys == false) {
+			if (failingPlaceholders.size() != keyPlaceholderToUpdate.size() || updateS3Keys == false || dryRun) {
 				pl("\tIssues were identified when parsing the placeholder files, address and restart:\n");
 				for (Placeholder ph: failingPlaceholders) pl(ph.getMinimalInfo());
 			}
@@ -874,7 +1038,7 @@ public class GSync {
 						case 'g': minGigaBytes = Double.parseDouble(args[++i]); break;
 						case 'f': fileExtensions = Util.COMMA.split(args[++i]); break;
 						case 'r': dryRun = false; break;
-						case 'v': verbose = true; break;
+						case 'q': verbose = true; break;
 						case 'u': updateS3Keys = true; break;
 						case 'c': restorePlaceholderFiles = true; break;
 						case 'k': deleteUploaded = true; break;
@@ -967,7 +1131,7 @@ public class GSync {
 		pl("  -r Dry run                   : "+ dryRun);
 		pl("  -u Update S3 keys            : "+ updateS3Keys);
 		pl("  -c Recreate placeholders     : "+ restorePlaceholderFiles);
-		pl("  -v Verbose output            : "+ verbose);
+		pl("  -q Verbose output            : "+ verbose);
 		pl("  -e Email                     : "+ email);
 		pl("  -s Smtp host                 : "+ smtpHost);
 		pl("  -k Delete local after upload : "+ deleteUploaded);
@@ -977,7 +1141,7 @@ public class GSync {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   GSync : Feb 2020                               **\n" +
+				"**                                   GSync : June 2020                              **\n" +
 				"**************************************************************************************\n" +
 				"GSync pushes files with a particular extension that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
@@ -1002,7 +1166,7 @@ public class GSync {
 				"      {\"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"},\n" + 
 				"      {\"Effect\": \"Deny\", \"Action\": \"s3:Delete*\", \"Resource\": \"*\"} ]}\n"+ 
 				"   For standard upload and download gsyncs, assign yourself to the AllExceptS3Delete\n"+
-				"   group. When you need to delete objects or buckets, switch to the Admin group, then\n"+
+				"   group. When you need to delete or update objects, switch to the Admin group, then\n"+
 				"   switch back. Accidental overwrites are OK since object versioning is enabled.\n"+
 				"   To add another layer of protection, apply object legal locks via the aws cli.\n"+
 				"3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
@@ -1036,14 +1200,14 @@ public class GSync {
 				"-k Delete local files that were successfully uploaded.\n"+
 				"-u Update S3 Object keys to match current placeholder paths.\n"+
 				"-c Recreate deleted placeholder files using info from orphaned S3 Objects.\n"+
-				"-v Verbose output.\n"+
+				"-q Quiet verbose output.\n"+
 				"-e Email addresses to send gsync messages, comma delimited, no spaces.\n"+
 				"-s Smtp host, defaults to hci-mail.hci.utah.edu\n"+
 				"-x Execute every 6 hrs until complete, defaults to just once, good for downloading\n"+
 				"    latent glacier objects.\n"+
 
 				"\nExample: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo \n"+
-				"     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov\n\n"+
+				"     -q -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov\n\n"+
 
 				"**************************************************************************************\n");
 
