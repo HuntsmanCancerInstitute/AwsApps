@@ -775,8 +775,12 @@ public class GSync {
 			//check that the parent dir exists, it must
 			File dir= f.getParentFile();
 			if (dir.exists() == false) {
-				pl("\tFailed, the parent directory does not exist, create it and restart ' mkdir -pv "+ dir+ " '");
-				return false;
+				boolean dirsMade = dir.mkdirs();
+				if (dirsMade == false) {
+					pl("\tFailed to make the parent directory cannot remake the placeholder, create the parent dir and restart ' mkdir -pv "+ dir+ " '");
+					return false;
+				}
+				
 			}
 
 			//check bucket, should never get this incorrect

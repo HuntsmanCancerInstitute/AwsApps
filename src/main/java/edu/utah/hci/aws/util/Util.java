@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
 import java.util.regex.Pattern;
@@ -42,6 +43,8 @@ public class Util {
 	public static final Pattern COMMA = Pattern.compile(",");
 	public static final Pattern EQUALS = Pattern.compile("\\s*=\\s*");
 	public static final Pattern FORWARD_SLASH = Pattern.compile("/");
+	public static final Pattern WHITESPACE = Pattern.compile("\\s+");
+	public static final Pattern QUESTION = Pattern.compile("\\?");
 	
 	public static double gigaBytes(File file) {
 		double bytes = file.length();
@@ -192,10 +195,14 @@ public class Util {
 
     /**Uses ProcessBuilder to execute a cmd, combines standard error and standard out into one and returns their output.
      * @throws IOException */
-    public static String[] executeViaProcessBuilder(String[] command, boolean printToStandardOut) throws IOException{
+    public static String[] executeViaProcessBuilder(String[] command, boolean printToStandardOut, Map<String,String> envVarToAdd) throws IOException{
     	ArrayList<String> al = new ArrayList<String>();
 
     	ProcessBuilder pb = new ProcessBuilder(command);
+    	
+    	//add enviro props?
+    	if (envVarToAdd != null) pb.environment().putAll(envVarToAdd);
+    	
     	pb.redirectErrorStream(true);
     	Process proc = pb.start();
 
@@ -221,12 +228,32 @@ public class Util {
 		write(new String[] {shellScript}, shellFile);
 		//set permissions for execution
 		String[] cmd = {"chmod", "777", shellFile.getCanonicalPath()};
-		String[] res = executeViaProcessBuilder(cmd, true);
+		String[] res = executeViaProcessBuilder(cmd, true, null);
 		if (res == null || res.length !=0 ) throw new IOException("Failed to execute "+shellScript);
 		//execute
 		cmd = new String[]{"bash", shellFile.getCanonicalPath()};
-		res = executeViaProcessBuilder(cmd, true);
+		res = executeViaProcessBuilder(cmd, true, null);
 		return res; 
+	}
+	
+	/**Loads a file's lines into a String[], won't save blank lines.*/
+	public static String[] loadTxtFile(File file){
+		ArrayList<String> a = new ArrayList<String>();
+		try{
+			BufferedReader in = new BufferedReader( new FileReader(file));
+			String line;
+			while ((line = in.readLine())!=null){
+				line = line.trim();
+				a.add(line);
+			}
+			in.close();
+		}catch(Exception e){
+			System.out.println("Prob loadFileInto String[]");
+			e.printStackTrace();
+		}
+		String[] strings = new String[a.size()];
+		a.toArray(strings);
+		return strings;
 	}
 
     // Prints progress while waiting for the transfer to finish.
@@ -276,6 +303,17 @@ public class Util {
 		out.close();
 	}
 	
+    /**Writes String to the file.*/
+	public static void write(String txt, File p) throws IOException {
+		PrintWriter out = new PrintWriter (new FileWriter (p));
+		out.println(txt);
+		out.close();
+	}
+	
+	public static void pl(Object ob) {
+		System.out.println(ob.toString());
+	}
+	
 	/** Fast & simple file copy. From GForman http://www.experts-exchange.com/M_500026.html
 	 * Hit an odd bug with a "Size exceeds Integer.MAX_VALUE" error when copying a vcf file. -Nix.*/
 	@SuppressWarnings("resource")
@@ -299,10 +337,10 @@ public class Util {
 		return true;
 	}
 	
-	/**Returns a nicely formated time, 15 May 2004 21:53.
-	 * (Note, all I can say is that the GC DateFormat Date classes are so convoluted as to be utterly useless. Shame!)*/
+	public static final String[] months = {"Jan","Feb","Mar","Apr","May","June","July", "Aug","Sept","Oct","Nov","Dec"};
+	
+	/**Returns a nicely formated time, 15 May 2004 21:53 */
 	public static String getDateTime(){
-		String[] months = {"Jan","Feb","Mar","Apr","May","June","July", "Aug","Sept","Oct","Nov","Dec"};
 		GregorianCalendar c = new GregorianCalendar();
 		int minutes = c.get(Calendar.MINUTE);
 		String min;
@@ -310,5 +348,28 @@ public class Util {
 		else min = ""+minutes;
 		return c.get(Calendar.DAY_OF_MONTH)+" "+months[c.get(Calendar.MONTH)]+" "+ c.get(Calendar.YEAR)+" "+c.get(Calendar.HOUR_OF_DAY)+":"+min;
 	}
+	
+	public static String getMinutesSinceEpoch(){
+		double ms = System.currentTimeMillis();
+		double min = ms/60000.0;
+		Long rounded = Math.round(min);
+		return rounded.toString();
+	}
+	
+	/**Attempts to delete a directory and it's contents.
+	 * Returns false if all the file cannot be deleted or the directory is null.
+	 * Files contained within scheduled for deletion upon close will cause the return to be false.*/
+	public static void deleteDirectory(File dir){
+		if (dir == null || dir.exists() == false) return;
+		if (dir.isDirectory()) {
+			File[] children = dir.listFiles();
+			for (int i=0; i<children.length; i++) {
+				deleteDirectory(children[i]);
+			}
+			dir.delete();
+		}
+		dir.delete();
+	}
+
 
 }

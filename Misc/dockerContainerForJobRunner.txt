@@ -1,0 +1,62 @@
+# david.nix@hci.utah.edu   9 June 2021
+
+# launch basic ubuntu container on hci-zion, update it, install libraries
+docker run -it -v /home/u0028003:/home/u0028003 ubuntu
+
+apt-get update
+apt-get install autoconf automake make gcc perl zlib1g-dev libbz2-dev liblzma-dev \
+libcurl4-gnutls-dev libssl-dev libperl-dev libgsl0-dev \
+build-essential wget curl unzip zip nano openjdk-8-jre graphviz \
+python3 python3-venv python3-pip \
+less groff
+
+# python
+python3 --version
+
+# using pip3 to install snakemake, don't use conda, major headache for containers
+pip3 install snakemake
+snakmake --version
+
+# aws cli, https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html
+mkdir -p /BioApps/AwsCli
+cd /BioApps/AwsCli/ 
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+./aws/install
+aws --version
+
+# AWS JobRunner, https://github.com/HuntsmanCancerInstitute/AwsApps
+mkdir -p /BioApps/AwsApps/
+cp /home/u0028003/JobRunner.jar /BioApps/AwsApps/
+java -jar /BioApps/AwsApps/JobRunner.jar
+
+# clean up
+apt-get clean
+apt-get autoclean
+apt-get autoremove
+
+# save the path
+echo $PATH
+	/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# commit and push it
+exit
+docker commit 2ed2495e0aa2 hcibioinformatics/public:JR_AWS_SM_1
+docker push hcibioinformatics/public:JR_AWS_SM_1
+
+# run it interactively and delete upon exit
+docker run -it --rm -v /home/u0028003:/home/u0028003 hcibioinformatics/public:JR_AWS_SM_1
+
+# run non interactively
+docker run --rm -v /home/u0028003:/home/u0028003 hcibioinformatics/public:JR_AWS_SM_1 java -jar /BioApps/AwsApps/JobRunner.jar
+
+docker run --rm -v /home/u0028003:/home/u0028003 hcibioinformatics/public:JR_AWS_SM_1 java -jar /BioApps/AwsApps/JobRunner.jar \
+-r s3://hcibioinfo-jobrunner/TNRunnerResTest.zip \
+-j s3://hcibioinfo-jobrunner/JobsToRun/ \
+-t /home/u0028003/JobRunnerTesting/WorkingDir/ \
+-e david.nix@hci.utah.edu \
+-c 'https://hcibioinfo-jobrunner.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIARHBYAZBR33RCJK6A%2F20210609%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20210609T160745Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=f4dd9a56cbf9fe74fa63512dcae65f5c3345d7312d1cd5960b84053ca73c4dcd'
+
+
+
+
