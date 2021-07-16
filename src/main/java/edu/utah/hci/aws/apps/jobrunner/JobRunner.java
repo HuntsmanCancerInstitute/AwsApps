@@ -27,13 +27,40 @@ aws s3 rm s3://hcibioinfo-jobrunner/NodeLogs/ --recursive
 aws s3 rm s3://hcibioinfo-jobrunner/Jobs/ --recursive
 aws s3 cp /Users/u0028003/Downloads/JobRunner/testJob.sh s3://hcibioinfo-jobrunner/Jobs/Patient1/JobA/testJob.sh
 aws s3 cp /Users/u0028003/Downloads/JobRunner/testJob.sh s3://hcibioinfo-jobrunner/Jobs/Patient1/JobA/mockDoc.txt
+aws s3 cp /Users/u0028003/Downloads/JobRunner/testJob.sh s3://hcibioinfo-jobrunner/Jobs/Patient1/JobB/testJob.sh
 aws s3 ls s3://hcibioinfo-jobrunner/ --recursive
+
+* using a docker container
+
+docker run -it -v /home/u0028003:/home/u0028003 hcibioinformatics/public:JR_AWS_SM_1 \
+java -jar -Xmx2G /BioApps/AwsApps/JobRunner.jar \
+or
+java -jar -Xmx2G ~/Code/AwsApps/target/JobRunner.jar \
+-c 'https://hcibioinfo-jobrunner.s3.us-west-2.amazonaws.com/Credentials/aws.cred.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIARHBYAZBR33RCJK6A%2F20210714%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20210714T223034Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=416f5f3a77652edd37ca193c5daa3c461b6a76a88d30623f117beec87232d70d' \
+-r s3://hcibioinfo-jobrunner/ResourceBundles/TNRunnerResTest.zip \
+-j s3://hcibioinfo-jobrunner/Jobs \
+-t /Users/u0028003/Downloads/JobRunner/TempDelme \
+-l s3://hcibioinfo-jobrunner/NodeLogs
+
+directly on ec2 node
+scp -i ~/HCI/Amazon/NixEc2.pem ~/Code/AwsApps/target/JobRunner.jar ec2-user@ec2-52-26-13-150.us-west-2.compute.amazonaws.com:/home/ec2-user
+sudo yum install java
+sudo pip3 install ec2metadata
+sudo ln -s /usr/local/bin/ec2metadata /usr/bin/ec2metadata
+
+sudo java -jar -Xmx2G JobRunner.jar \
+-c "https://hcibioinfo-jobrunner.s3.us-west-2.amazonaws.com/Credentials/aws.cred.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIARHBYAZBR33RCJK6A%2F20210716%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20210716T164016Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=c96ef66e7137a7dc765f59b72372dfc4d0481eb0ad8e891cf2ca742a9acb40ec" \
+-r s3://hcibioinfo-jobrunner/ResourceBundles/TNRunnerResTest.zip \
+-j s3://hcibioinfo-jobrunner/Jobs \
+-t /ebs \
+-l s3://hcibioinfo-jobrunner/NodeLogs
+
  * 
  * while read line; do echo $line; done < toDownload.txt
  * 
  */
 public class JobRunner {
-
+	
 	//user defined fields
 	private File workDirectory = null;
 	private String resourceS3Uri = null;
@@ -42,18 +69,26 @@ public class JobRunner {
 	private String credentialsUrl = null;
 	private boolean verbose = false;
 	private String jobSuffix = ".sh";
+	private int ebsSize = 100;
 
 	//internal fields
 	private String numberProcessors = "NA";
 	private String ram = "NA";
+	private String availabilityZone = null;
+	private String instanceId = null;
+	private String instanceType = null;
+	private String ebsId = null;
 	private String awsPath = "aws";
 	private StringBuilder hostLog = new StringBuilder();
 	private File awsCredentialsDir = null;
 	private HashMap<String, String> envPropToAdd = new HashMap <String, String>();
 	private String hostName = null;
+	private boolean ebsVolumeInstantiated = false;
 	private boolean resourceBundleDownloaded = false;
+	private boolean wroteInstantiationLog = false;
 	private File credentialsFile = null;
 	private StringBuilder jobSummaries = new StringBuilder();
+	private String[] environment = null;
 	private long totalRunTime = 0;
 
 	//possible files in the jobsS3Uri/
@@ -104,18 +139,22 @@ public class JobRunner {
 			checkAwsCli();
 
 			checkResourceBundle();
-
-			writeInstantiationLog();
+			
 
 			//loop until no new jobs
 			while (true) {
 				long startTime = System.currentTimeMillis();
 
 				//fetch next job
-				if (fetchJob() == false) break;
+				if (fetchJob() == false) {
+					writeInstantiationLog();
+					break;
+				}
 
 				//check and if not present, download and unzip the data bundle, only do this if there is a job to run, will exit if a problem is found
+				createEBSVolume();
 				downloadResourceBundle();
+				writeInstantiationLog();
 				
 
 				pl("\n----------------------- Launching a new job "+originalJobScriptS3Uri+" -----------------------");
@@ -143,10 +182,12 @@ public class JobRunner {
 			}
 
 			//shutdown node
-			pl("\nNo more jobs...\nShutting down node...");
+			pl("\nNo more jobs...");
 			totalRunTime = Math.round(((double)(System.currentTimeMillis() -startTimeTotal))/60000);
 			writeSummaryStats();
 			writeNodeComplete();
+			
+			pl("\nShutting down node...");
 			shutDown(0);
 			
 
@@ -160,14 +201,101 @@ public class JobRunner {
 					moveS3File(runningJobScriptS3Uri, originalJobScriptS3Uri, true);
 				}
 			} catch (Exception e1) {e1.printStackTrace();}
+			
 			el("\nShutting down node...");
 			try {
 				writeNodeError(Util.getStackTrace(e));
 			} catch (IOException e1) {e1.printStackTrace();}
 
-			shutDown(1);
+			try {
+				shutDown(1);
+			} catch (Exception e1) {
+				e1.printStackTrace();
+			}
 
 		}
+	}
+
+	private void createEBSVolume() throws Exception {
+		//only do so if on an ec2 instance otherwise skip it
+		if (ebsVolumeInstantiated || availabilityZone == null || instanceId == null) return;
+		Util.pl("\nBuilding a "+ebsSize+"GB EBS volume for this instance...");
+
+		
+		String[] cmd = {awsPath, "ec2", "create-volume", "--size", new Integer(ebsSize).toString(), "--encrypted", "--availability-zone", availabilityZone, "--tag-specifications", 
+				"ResourceType=volume,Tags=[{Key=Name,Value=JobRunnerEBSForEC2Instance_"+instanceId+"}]"};
+		String[] out = executeViaProcessBuilder(cmd, false);
+		//extract volume id
+		for (String s: out) {
+			//"VolumeId": "vol-0df895a009d5866a3",
+			if (s.contains("VolumeId")) {
+				String[] split = Util.COLON.split(s);
+				ebsId = split[1].trim();
+				ebsId = ebsId.replaceAll("\"", "");
+				ebsId = ebsId.replaceAll(",", "");
+				break;
+			}
+		}
+		
+		if (ebsId == null) throw new IOException("\tFailed to create an EBS volume "+Util.stringArrayToString(out, "\n"));
+		
+		
+		//attach the volume, need to try this a few time since the volume won't be available
+		cmd = new String[] {awsPath, "ec2", "attach-volume", "--volume-id", ebsId, "--instance-id", instanceId, "--device","/dev/sdf"};
+		int retries = 3;
+		boolean attached = false;
+		while (retries-- > 0) {
+			Thread.sleep(10000);
+			int exitCode = executeReturnExitCode(cmd, false, verbose);
+			if (exitCode == 0) {
+				attached = true;
+				break;
+			}
+		}
+		if (attached == false) throw new IOException("ERROR: Failed to attach ebs volume. Aborting");
+		
+		//use lsblk cmd to find the name of the volume
+		cmd = new String[] {"lsblk"};
+		retries = 5;
+		String volName = null;
+		while (retries-- > 0) {
+			Thread.sleep(10000);
+			out = executeViaProcessBuilder(cmd, false);
+			//extract name
+			String lookingFor = " "+ebsSize+"G ";
+			for (String s: out) {
+				//nvme1n1       259:3    0  80G  0 disk 
+				if (s.contains(lookingFor)) {
+					String[] split = Util.WHITESPACE.split(s);
+					volName = "/dev/"+split[0];
+					break;
+				}
+			}
+			if (volName!= null) break;
+		}
+		if (volName == null) throw new IOException("\tFailed to find the volume name with 'lsblk' "+Util.stringArrayToString(out, "\n"));
+		
+		//check if there is a file system already on it?
+		//sudo file -s /dev/nvme1n1
+		//if it returns "/dev/nvme1n1: data" then it is blank and needs formatting, anything else already has a file system and likely some data
+
+		//add a file system, sudo mkfs -t xfs /dev/nvme1n1
+		cmd = new String[] {"sudo", "mkfs", "-t", "xfs", volName};
+		if (executeReturnExitCode(cmd, false, true) != 0) throw new IOException("ERROR: Failed to make a file system on the ebs volume. Aborting");
+		
+		//create a dir to mount it then mount it, actually this is already done
+		//cmd = new String[] {"sudo", "mkdir", "/ebs"};
+		//executeReturnExitCode(cmd, false)
+		//if (tthrow new IOException("ERROR: Failed to make a directory for the ebs volume. Aborting");
+		
+		//mount it
+		cmd = new String[] {"sudo", "mount", volName, "/ebs"};
+		if (executeReturnExitCode(cmd, false, true) != 0) throw new IOException("ERROR: Failed to mount the ebs volume. Aborting");
+		
+		ebsVolumeInstantiated = true;
+		
+		Util.pl("  EBS Volume ID: "+ebsId);
+		
 	}
 
 	private void writeSummaryStats() {
@@ -181,7 +309,7 @@ public class JobRunner {
 	private void uploadJobLogToS3JobDir() throws Exception {
 		if (verbose) pl("\tUploading "+jobLogFile+" to "+runningJobDirS3Uri+" ...");
 		String[] cmd = {awsPath, "s3", "cp", jobLogFile.getCanonicalPath(), runningJobDirS3Uri};
-		int exitCode = executeReturnExitCode(cmd, false);
+		int exitCode = executeReturnExitCode(cmd, false, true);
 		if (exitCode == 0) {
 			jobLogFile.delete();
 			return;
@@ -194,32 +322,69 @@ public class JobRunner {
 	private void syncLocalJobDirWithS3JobDir() throws Exception {
 		if (verbose) pl("\tSyncing "+localJobDir+"/ with "+runningJobDirS3Uri+" ...");
 		String[] cmd = {awsPath, "s3", "sync", localJobDir.getCanonicalPath(), runningJobDirS3Uri};
-		int exitCode = executeReturnExitCode(cmd, false);
+		int exitCode = executeReturnExitCode(cmd, false, true);
 		if (exitCode == 0) return;
 		//this should not fail unless a major problem occurs
 		throw new IOException("\tFailed to sync "+localJobDir+" with "+runningJobDirS3Uri);
 	}
 
 	/*writeNodeLogCode 0=noWrite, 1=error, 2=complete*/
-	private void shutDown(int exitCode) {
-
-		//remove the credentials dir
-		if (awsCredentialsDir != null) Util.deleteDirectory(awsCredentialsDir);
+	private void shutDown(int exitCode) throws Exception {
 
 		//delete the working directory
-		Util.deleteDirectory(workDirectory);
+		if (ebsVolumeInstantiated == false) Util.deleteDirectory(workDirectory);
+		else {
+			String region = availabilityZone.substring(0, availabilityZone.length()-1);			
+			//detach
+			String[] cmd = {awsPath, "--region", region, "ec2", "detach-volume", "--instance-id", instanceId, "--volume-id", ebsId};
+			if (executeReturnExitCode(cmd, false, true) !=0) {
+				cmd = new String[]{awsPath, "--region", region, "ec2", "detach-volume", "--instance-id", instanceId, "--volume-id", ebsId, "--force"};
+				executeReturnExitCode(cmd, false, true);
+			}
+			
+			//delete it 
+			cmd = new String[]{awsPath,  "--region", region, "ec2", "delete-volume", "--volume-id", ebsId};
+			int retries = 6;
+			int code = 1;
+			while (retries-- > 0) {
+				Thread.sleep(2000);
+				code = executeReturnExitCode(cmd, false, verbose);
+				if (code == 0) {
+					pl("  Sucessfully deleted the EBS volume "+ebsId);
+					break;
+				}
+			}
+			
+			if (code !=0) {
+				el("\nERROR: failed to deleted the EBS volume "+ebsId+ "  USE THE AWS Console TO DELETE IT!");
+				exitCode = code;
+			}
+			
+			
+			//terminate, prob not good to do this, need to have credentials present
+			//cmd = new String[]{awsPath, "ec2", "terminate-instances", "--instance-ids", instanceId};
+			//executeReturnExitCode(cmd, true);
 
+		}
+		
+		//remove the credentials dir and work dir
+		if (awsCredentialsDir != null) Util.deleteDirectory(awsCredentialsDir);
+		if (workDirectory != null) Util.deleteDirectory(workDirectory);
+		
 		System.exit(exitCode);
 	}
 
 	private void writeInstantiationLog() throws Exception {
+		if (wroteInstantiationLog) return;
+		wroteInstantiationLog = true;
+		
 		pl("\n"+hostName+" successfully instantiated...");
 		String minSinceEpoc = Util.getMinutesSinceEpoch();
 		
 		File hostLogFile = new File (workDirectory, hostName+ nodeInstantiated +minSinceEpoc + ".txt");
 		Util.write(hostLog.toString(), hostLogFile);
 		String[] cmd = {awsPath, "s3", "cp", hostLogFile.getCanonicalPath(), logsS3Uri+ hostName+ nodeInstantiated+ minSinceEpoc+ ".txt"};
-		if (executeReturnExitCode(cmd, false) == 0) return;
+		if (executeReturnExitCode(cmd, false, true) == 0) return;
 		//this should not fail unless a major problem is found
 		throw new IOException("\tFailed to upload the node instantiation log "+hostLogFile.getCanonicalPath()+" to "+ logsS3Uri );
 	}
@@ -265,7 +430,7 @@ public class JobRunner {
 
 		if (verbose) pl("\tExecuting "+jobScript.getCanonicalPath());
 		String[] cmd = {jobScript.getCanonicalPath()};
-		int exitCode = executeReturnExitCode(cmd, true);
+		int exitCode = executeReturnExitCode(cmd, true, true);
 
 		//Success? rename running job file to complete
 		String finalUri = null;
@@ -302,7 +467,7 @@ public class JobRunner {
 	private boolean moveS3File(String startingS3Uri, String endingS3Uri, boolean printErrorMessage) throws Exception {
 		if (startingS3Uri == null || endingS3Uri == null) return false;
 		String[] cmd = {awsPath, "s3", "mv", startingS3Uri, endingS3Uri};
-		if (executeReturnExitCode(cmd, false) == 0) return true;
+		if (executeReturnExitCode(cmd, false, true) == 0) return true;
 		if (printErrorMessage || verbose) el("\tFailed to mv "+startingS3Uri+" to "+endingS3Uri);
 		return false;
 	}
@@ -342,7 +507,7 @@ public class JobRunner {
 	private void syncS3JobDirWithLocal() throws Exception {
 		if (verbose) pl("\tSyncing "+runningJobDirS3Uri+" with "+localJobDir+"/ ...");
 		String[] cmd = {awsPath, "s3", "sync", runningJobDirS3Uri, localJobDir.getCanonicalPath()};
-		int exitCode = executeReturnExitCode(cmd, false);
+		int exitCode = executeReturnExitCode(cmd, false, true);
 		if (exitCode == 0 && jobScript.exists() && jobScript.setExecutable(true)) return;
 		//this should not fail unless a major problem occurs
 		throw new IOException("\tFailed to sync "+runningJobDirS3Uri+" to "+localJobDir+" or find/ make executable the script "+jobScript);
@@ -491,7 +656,7 @@ public class JobRunner {
 	/**Uses ProcessBuilder to execute a cmd, combines standard error and standard out into one and printsToLogs if indicated.
 	 * Returns exit code, 0=OK, >0 a problem
 	 * @throws IOException */
-	public int executeReturnExitCode(String[] command, boolean printToLog) throws Exception{
+	public int executeReturnExitCode(String[] command, boolean printToLog, boolean printIfNonZero) throws Exception{
 		if (verbose) pl ("Executing: "+Util.stringArrayToString(command, " "));
 		ProcessBuilder pb = new ProcessBuilder(command);
 		//add enviro props?
@@ -499,9 +664,16 @@ public class JobRunner {
 		pb.redirectErrorStream(true);
 		Process proc = pb.start();
 		BufferedReader data = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		StringBuilder sb = new StringBuilder();
 		String line;
-		while ((line = data.readLine()) != null) if (printToLog || verbose) pl(line);
-		return proc.waitFor();
+		while ((line = data.readLine()) != null) {
+			if (printToLog || verbose) pl(line);
+			sb.append(line);
+			sb.append("\n");
+		}
+		int exitCode = proc.waitFor();
+		if (exitCode !=0 && printIfNonZero) pl(sb.toString());
+		return exitCode;
 	}
 
 	void pl(String s) {
@@ -597,8 +769,6 @@ public class JobRunner {
 		//set env var for the aws cli 
 		envPropToAdd.put("AWS_SHARED_CREDENTIALS_FILE", credentialsFile.getCanonicalPath());
 
-		//add workingDir
-		envPropToAdd.put("JR_WORKING_DIR", workDirectory.getCanonicalPath());
 
 //TODO: Only needed in Eclipse
 //envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
@@ -620,11 +790,13 @@ public class JobRunner {
 				char test = args[i].charAt(1);
 				try{
 					switch (test){
-					case 't': workDirectory = new File(args[++i]); break;
+					case 't': workDirectory = new File(args[++i]).getCanonicalFile(); break;
 					case 'r': resourceS3Uri = args[++i]; break;
 					case 'c': credentialsUrl = args[++i]; break;
 					case 'j': jobsS3Uri = args[++i]; break;
 					case 'l': logsS3Uri = args[++i]; break;
+					case 'e': ebsSize = Integer.parseInt(args[++i]); break;
+					case 'v': verbose = true; break;
 					case 'h': printDocs(); System.exit(0);
 					default: Util.printExit("\nProblem, unknown option! " + mat.group());
 					}
@@ -634,14 +806,38 @@ public class JobRunner {
 				}
 			}
 		}
-
+		
+		//work directory, need this to find RAM on machine
+		if (workDirectory == null) {
+			throw new IOException("Error: failed to find your -t temporary local work directory.");
+		}
+		
+		Util.deleteDirectory(workDirectory);
+		workDirectory.mkdirs();
+		if (workDirectory.exists() == false || workDirectory.canWrite() == false) {
+			throw new IOException("Error: failed to find a writable work directory -> "+ workDirectory);
+		}
+		
 		//set node info
 		loadHostInfo();
+
+		//reset work dir?
+		if (instanceId != null) {
+			Util.deleteDirectory(workDirectory);
+			workDirectory = new File("/ebs");
+			workDirectory.mkdirs();
+			if (workDirectory.exists() == false || workDirectory.canWrite() == false) {
+				throw new IOException("Error: failed to find a writable work directory -> "+ workDirectory);
+			}
+		}
+		
+		//add workingDir to env
+		envPropToAdd.put("JR_WORKING_DIR", workDirectory.getCanonicalPath());
 
 		printParams();
 
 		// required args?
-		if (workDirectory == null || resourceS3Uri == null || credentialsUrl == null || jobsS3Uri == null || logsS3Uri == null) {
+		if (resourceS3Uri == null || credentialsUrl == null || jobsS3Uri == null || logsS3Uri == null) {
 			throw new IOException("Error: failed to find one or more of the required arguments, see Parameters above.");
 		}
 
@@ -649,17 +845,9 @@ public class JobRunner {
 		if (jobsS3Uri.endsWith("/") == false) jobsS3Uri = jobsS3Uri+"/";
 		if (logsS3Uri.endsWith("/") == false) logsS3Uri = logsS3Uri+"/";
 
-		//work directory
-		Util.deleteDirectory(workDirectory);
-		workDirectory.mkdirs();
-		if (workDirectory.exists() == false || workDirectory.canWrite() == false) {
-			throw new IOException("Error: failed to find a writable work directory -> "+ workDirectory);
-		}
-		executeViaProcessBuilder(new String[]{"rm","-rf",workDirectory.getCanonicalPath()+"/*"}, false);
-
 		//check S3Uri
 		if (resourceS3Uri.startsWith("s3://") == false || jobsS3Uri.startsWith("s3://") == false) {
-			throw new IOException("Error: S3URIs must start with s3:// "+ workDirectory);
+			throw new IOException("Error: S3URIs must start with s3:// see Parameters above.");
 		}
 		if (resourceS3Uri.endsWith(".zip") == false) throw new IOException("Error: the zip resource S3Uri must end with xxx.zip, see "+resourceS3Uri);	
 
@@ -670,11 +858,31 @@ public class JobRunner {
 		hostName = InetAddress.getLocalHost().getHostName();
 		String[] out;
 		try {
+			//env		
+			environment = executeViaProcessBuilder(new String[]{"env"}, false);
+			
+			//num proc
 			out = executeViaProcessBuilder(new String[]{"nproc"}, false);
 			if (out!= null && out.length == 1) numberProcessors = out[0];
+			//availible memory
 			out = Util.executeShellScript("expr `free -g | grep -oP '\\d+' | head -n 1` - 2", workDirectory);
-			if (out!= null && out.length == 1) ram = out[0];
-		} catch (IOException e) {}
+			if (out!= null && out.length != 0) {
+				ram = out[0];
+				if (ram.startsWith("-")) ram = "<1";
+			}
+			//will only work if this is in an ec2 instance
+			out = executeViaProcessBuilder(new String[]{"ec2metadata", "--availability-zone", "--instance-id", "--instance-type"}, false);
+			if (out!= null && out.length == 3) {
+				availabilityZone = out[0];
+				instanceId = out[1];
+				instanceType = out[2];
+			}
+
+			
+		} catch (IOException e) {
+			pl("ERROR fetching host information");
+			pl(Util.getStackTrace(e));
+		}
 
 	}
 
@@ -686,32 +894,49 @@ public class JobRunner {
 		pl("  -j Jobs S3 URI         : "+ jobsS3Uri);
 		pl("  -l Node Logs S3 URI    : "+ logsS3Uri);
 		pl("  -t Temporary work dir  : "+ workDirectory);
+		pl("  -e EBS volume size     : "+ ebsSize);
 
 		pl("\nJob Runner Info:");
 		pl("  Host name              : "+ hostName);
 		pl("  Number processors      : "+ numberProcessors);
 		pl("  GB RAM                 : "+ ram);
+		
+		if (availabilityZone != null) {
+			pl("  Availability Zone      : "+ availabilityZone);
+			pl("  Instance ID            : "+ instanceId);
+			pl("  instance Type          : "+ instanceType);
+		}
+		
+		if (verbose && environment != null) {
+			pl("\nEnvironment:");
+			for (String s: environment) pl("  "+s);
+		}
+		
+		
 	}
 
 	public static void printDocs(){
 		System.out.println("\n" +
 				"**************************************************************************************\n" +
-				"**                                  AWS Job Runner : June 2021                      **\n" +
+				"**                                  AWS Job Runner : July 2021                      **\n" +
 				"**************************************************************************************\n" +
-				"Install and place in path curl, aws cli, unzip, and everything needed to run your job\n" +
-				"scripts.\n"+
+				"JR is an app for running bash scripts on EC2 nodes in AWS. When run from within an EC2 instance it creates an EBS volume, downloads and uncompressed your resource bundle, "
+				+ "looks for xxx.sh scripts in you S3 Jobs directory, copies over the contents, and executes the xxx.sh script, and syncs back the results.  This is repeated until no un run jobs are found.  Launch "
+				+ "multiple JR EC2 instances to run your jobs in parallel. Launch JR EC2 instances with Amazon Batch and hybernating spot instances to reduce the compute cost.  "+
+				
+				"JR dependencies include: java, aws cli, ec2metadata, curl, and unzip. Be sure these are installed and in your path. A base docker image is available from \n" +
 				
 				"JR_WORKING_DIR and JR_JOB_DIR \n" +
 
-				"\nRequired:\n"+
+				"\nOptions:\n"+
 				"-c URL to your config credentials file. Use the aws cli to generate a secure timed URL,\n"+
 				"     e.g. aws s3 presign s3://hcibioinfo-jobrunner/aws.cred.txt  --expires-in 86400\n"+
-				"     Example config file (no leading spaces, email info optional):\n"+
+				"     Example config file (no leading spaces):\n"+
 				"       [default]\n"+
 				"       region = us-west-2\n"+
 				"       aws_access_key_id = AKICVRTUUZZSDRCXWWJK6A\n"+
 				"       aws_secret_access_key = BgDV2UHZvT5adfWRy226GV65HZMpUQ\n"+
-				"-t Temporary directory on the worker node, full path, in which resources and job files will be processed.\n"+
+				"-t Temporary directory on the worker node, full path, in which resources and job files will be processed. If running on an EC2 instance, this will be set to /ebs/, otherwise provide it.\n"+
 				"-r Resource bundle, zip compressed, S3URI. It will be copied into the work directory\n"+
 				"     and unzipped.\n"+
 				"-s File name suffix for job scripts to execute, defaults to '.sh'\n"+
@@ -720,12 +945,13 @@ public class JobRunner {
 				"     COMPLETE is found in the job directory upon job completion, the _running_ S3\n"+
 				"     object will be renamed _complete_, otherwise it is renamed _error_. Recursive. \n"+
 				"-l Log folder on S3 to write node logs.\n"+
+				"-e EBS volume size, defaults to 100 GB.\n"+
 
 				"\nExample: java -jar pathTo/JobRunner.jar\n"+
 				"-r s3://hcibioinfo-jobrunner/TNRunnerResourceBundle.zip\n"+
 				"-j s3://hcibioinfo-jobrunner/Jobs/\n"+
 				"-l s3://hcibioinfo-jobrunner/NodeLogs/\n"+
-				"-t /mnt/TempWorkDir/\n"+
+				"-t /ebs -e 1000 \n"+
 				"-c 'https://hcibioinfo-jobrunner.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIARHBYAZBR33RCJK6A%2F20210608%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20210608T141053Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=8cc26200af48a0c218c0f1db128ae0649eb2d6db5fa7f99ec6c243df19afdf90'\n\n"+
 
 				"**************************************************************************************\n");

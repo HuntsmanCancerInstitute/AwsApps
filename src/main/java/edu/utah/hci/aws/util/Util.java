@@ -40,6 +40,7 @@ import com.amazonaws.services.s3.transfer.TransferProgress;
 /**Static utility methods.*/
 public class Util {
 
+	public static final Pattern COLON = Pattern.compile(":");
 	public static final Pattern COMMA = Pattern.compile(",");
 	public static final Pattern EQUALS = Pattern.compile("\\s*=\\s*");
 	public static final Pattern FORWARD_SLASH = Pattern.compile("/");
@@ -226,13 +227,11 @@ public class Util {
 		shellFile.deleteOnExit();
 		//write to shell file
 		write(new String[] {shellScript}, shellFile);
-		//set permissions for execution
-		String[] cmd = {"chmod", "777", shellFile.getCanonicalPath()};
-		String[] res = executeViaProcessBuilder(cmd, true, null);
-		if (res == null || res.length !=0 ) throw new IOException("Failed to execute "+shellScript);
+		shellFile.setExecutable(true);
 		//execute
-		cmd = new String[]{"bash", shellFile.getCanonicalPath()};
-		res = executeViaProcessBuilder(cmd, true, null);
+		String[] cmd = new String[]{"bash", shellFile.getCanonicalPath()};
+		String[] res = executeViaProcessBuilder(cmd, false, null);
+		shellFile.delete();
 		return res; 
 	}
 	
