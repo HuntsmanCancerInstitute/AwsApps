@@ -16,12 +16,14 @@ import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.mail.Message;
@@ -348,12 +350,35 @@ public class Util {
 		return c.get(Calendar.DAY_OF_MONTH)+" "+months[c.get(Calendar.MONTH)]+" "+ c.get(Calendar.YEAR)+" "+c.get(Calendar.HOUR_OF_DAY)+":"+min;
 	}
 	
+	/**Returns a nicely formated time, with given separator between the date and the time, 15May2004 21 53 */
+	public static String getDateTime(String separator){
+		GregorianCalendar c = new GregorianCalendar();
+		int minutes = c.get(Calendar.MINUTE);
+		String min;
+		if (minutes < 10) min = "0"+minutes;
+		else min = ""+minutes;
+		return c.get(Calendar.DAY_OF_MONTH)+months[c.get(Calendar.MONTH)]+ c.get(Calendar.YEAR)+separator+c.get(Calendar.HOUR_OF_DAY)+separator+min;
+	}
+	
 	public static String getMinutesSinceEpoch(){
 		double ms = System.currentTimeMillis();
 		double min = ms/60000.0;
 		Long rounded = Math.round(min);
 		return rounded.toString();
 	}
+	
+	/**Fetch random string constisting of ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890*/
+	private static String SALTCHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+	public static String getRandomString(int length) {
+        StringBuilder salt = new StringBuilder();
+        Random rnd = new Random();
+        while (salt.length() < length) { // length of the random string.
+            int index = (int) (rnd.nextFloat() * SALTCHARS.length());
+            salt.append(SALTCHARS.charAt(index));
+        }
+        String saltStr = salt.toString();
+        return saltStr;
+    }
 	
 	/**Attempts to delete a directory and it's contents.
 	 * Returns false if all the file cannot be deleted or the directory is null.
@@ -368,6 +393,36 @@ public class Util {
 			dir.delete();
 		}
 		dir.delete();
+	}
+	
+	/**Extracts the full path file names of all the files in a given directory with a given extension (ie txt or .txt).
+	 * If the dirFile is a file and ends with the extension then it returns a File[] with File[0] the
+	 * given directory. Returns null if nothing found. Case insensitive.*/
+	public static File[] extractFiles(File dirOrFile, String extension){
+		if (dirOrFile == null || dirOrFile.exists() == false) return null;
+		File[] files = null;
+		Pattern p = Pattern.compile(".*"+extension+"$", Pattern.CASE_INSENSITIVE);
+		Matcher m;
+		if (dirOrFile.isDirectory()){
+			files = dirOrFile.listFiles();
+			int num = files.length;
+			ArrayList<File> chromFiles = new ArrayList<File>();
+			for (int i=0; i< num; i++)  {
+				m= p.matcher(files[i].getName());
+				if (m.matches()) chromFiles.add(files[i]);
+			}
+			files = new File[chromFiles.size()];
+			chromFiles.toArray(files);
+		}
+		else{
+			m= p.matcher(dirOrFile.getName());
+			if (m.matches()) {
+				files=new File[1];
+				files[0]= dirOrFile;
+			}
+		}
+		if (files != null) Arrays.sort(files);
+		return files;
 	}
 
 
