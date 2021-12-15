@@ -1,10 +1,10 @@
 # AwsApps
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app.
 <pre>
-MacBook-Pro-89:~ u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/GSync_0.4.jar 
+u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/GSync_0.6.jar 
 
 **************************************************************************************
-**                                   GSync : Feb 2020                               **
+**                                   GSync : June 2020                              **
 **************************************************************************************
 GSync pushes files with a particular extension that exceed a given size and age to 
 Amazon's S3 object store. Associated genomic index files are also moved. Once 
@@ -29,7 +29,7 @@ To use the app:
       {"Effect": "Allow", "Action": "*", "Resource": "*"},
       {"Effect": "Deny", "Action": "s3:Delete*", "Resource": "*"} ]}
    For standard upload and download gsyncs, assign yourself to the AllExceptS3Delete
-   group. When you need to delete objects or buckets, switch to the Admin group, then
+   group. When you need to delete or update objects, switch to the Admin group, then
    switch back. Accidental overwrites are OK since object versioning is enabled.
    To add another layer of protection, apply object legal locks via the aws cli.
 3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod
@@ -63,14 +63,69 @@ Optional:
 -k Delete local files that were successfully uploaded.
 -u Update S3 Object keys to match current placeholder paths.
 -c Recreate deleted placeholder files using info from orphaned S3 Objects.
--v Verbose output.
+-q Quiet verbose output.
 -e Email addresses to send gsync messages, comma delimited, no spaces.
 -s Smtp host, defaults to hci-mail.hci.utah.edu
 -x Execute every 6 hrs until complete, defaults to just once, good for downloading
     latent glacier objects.
 
 Example: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_repo 
-     -v -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov
+     -q -a 90 -g 1 -d -d /Repo/DNA,/Repo/RNA,/Repo/Fastq -e obama@real.gov
 
 **************************************************************************************
+
+
+
+
+u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/JobRunner_0.2.jar 
+
+****************************************************************************************************************************
+**                                              AWS Job Runner : December 2021                                            **
+****************************************************************************************************************************
+JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed your resource bundle and looks for
+xxx.sh_JR_START files in your S3 Jobs directories. For each, it copies over the directory contents, executes the
+associated xxx.sh script, and transfers back the results.  This is repeated until no unrun jobs are found. Launch many
+EC2 JR nodes, each running an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and
+hibernation to reduce costs.
+
+To use:
+1) Install and configure the aws cli on your local workstation, see https://aws.amazon.com/cli/
+2) Upload your aws credentials file into a private bucket on aws, e.g.
+     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt
+3) Generate a secure 24hr timed URL for the credentials file, e.g.
+     aws --region us-west-2  s3 presign s3://my-jr/aws.cred.txt  --expires-in 259200
+4) Upload a zip archive containing resources needed to run your jobs into S3, e.g.
+     aws s3 cp ~/TNRunnerResourceBundle.zip s3://my-jr/TNRunnerResourceBundle.zip
+     This will be copied into the /JRDir/ directory and then unzipped.
+5) Upload script and job files into a 'Jobs' directory on S3, e.g.
+     aws s3 cp ~/JRJobs/A/ s3://my-jr/Jobs/A/ --recursive
+6) Optional, upload bash script files ending with JR_INIT.sh and or JR_TERM.sh. These are executed by JR before and after
+     running the main bash script.  Use these to copy in sample specific resources, e.g. fastq/ cram/ bam files, and to run
+     post job clean up.
+7) Upload a file named XXX_JR_START to let the JobRunner know the bash script named XXX is ready to run, e.g.
+     aws s3 cp s3://my-jr/emptyFile s3://my-jr/Jobs/A/dnaAlignQC.sh_JR_START
+8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See https://ri-confluence.hci.utah.edu/x/gYCgBw
+
+Job Runner Options:
+-c URL to your secure timed config credentials file.
+-r S3URI to your zipped resource bundle.
+-j S3URI to your root Jobs directory containing folders with job scripts to execute.
+-l S3URI to your Log folder for node logs.
+
+Default Options:
+-d Directory on the local worker node, full path, in which resources and job files will be processed, defaults to /JRDir/
+-a Aws credentials directory, defaults to ~/.aws/
+-t Terminate the EC2 node upon job completion. Defaults to looking for jobs for the min2Wait.
+-w Minutes to wait when jobs are not found before termination, defaults to 10.
+-x Replace S3 job directories with processed analysis, defaults to syncing local with S3. WARNING, if selected, don't place
+     any files in these S3 jobs directories that cannot be replaced. JR will delete them.
+-v Verbose debugging output.
+
+Example: java -jar -Xmx1G JobRunner.jar
+     -r s3://my-jr/TNRunnerResourceBundle.zip
+     -j s3://my-jr/Jobs/
+     -l s3://my-jr/NodeLogs/
+     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMXXX...'
+
+****************************************************************************************************************************
 </pre>
