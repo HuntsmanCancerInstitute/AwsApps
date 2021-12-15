@@ -220,6 +220,30 @@ public class Util {
     	al.toArray(res);
     	return res;
     }
+    
+	/**Uses ProcessBuilder to execute a cmd, combines standard error and standard out into one and printsToLogs if indicated.
+	 * Returns exit code, 0=OK, >0 a problem
+	 * @throws IOException */
+	public static int executeReturnExitCode(String[] command, boolean printToLog, boolean printIfNonZero, Map<String,String> envVarToAdd) throws Exception{
+		if (printToLog) pl ("Executing: "+Util.stringArrayToString(command, " "));
+		ProcessBuilder pb = new ProcessBuilder(command);
+		//add enviro props?
+		if (envVarToAdd!=null) pb.environment().putAll(envVarToAdd);
+		pb.redirectErrorStream(true);
+		Process proc = pb.start();
+		BufferedReader data = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		StringBuilder sb = new StringBuilder();
+		String line;
+		while ((line = data.readLine()) != null) {
+			if (printToLog) pl(line);
+			sb.append(line);
+			sb.append("\n");
+		}
+		int exitCode = proc.waitFor();
+		if (exitCode !=0 && printIfNonZero) pl(sb.toString());
+		return exitCode;
+	}
+	
 	
 	/**Executes a String of shell script commands via a temp file.  Only good for Unix.
 	 * @throws IOException */
@@ -313,6 +337,10 @@ public class Util {
 	
 	public static void pl(Object ob) {
 		System.out.println(ob.toString());
+	}
+	
+	public static void el(Object ob) {
+		System.err.println(ob.toString());
 	}
 	
 	/** Fast & simple file copy. From GForman http://www.experts-exchange.com/M_500026.html

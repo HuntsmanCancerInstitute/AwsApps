@@ -67,6 +67,7 @@ public class JobRunner {
 	//user defined fields
 	private File workDirectory = new File ("/JRDir");
 	private File tmpDirectory = null;
+	private File awsCredentialsDir = null;
 	private String resourceS3Uri = null;
 	private String jobsS3Uri = null;
 	private String logsS3Uri = null;
@@ -74,6 +75,8 @@ public class JobRunner {
 	private boolean verbose = false;
 	private boolean syncDirs = true;
 	private boolean terminateInstance = false;
+	private int minToWait = 60;
+	private boolean testing = false;
 
 	//internal fields
 	private String jobStartSuffix = "_JR_START";
@@ -85,17 +88,17 @@ public class JobRunner {
 	private String availabilityZone = null;
 	private String instanceId = null;
 	private String instanceType = null;
+	private double spotPrice = 0;
 	private String awsPath = "aws";
 	private StringBuilder hostLog = new StringBuilder();
-	private File awsCredentialsDir = null;
 	private HashMap<String, String> envPropToAdd = new HashMap <String, String>();
 	private String hostName = null;
+	private int exitCode = 999;
 
 	private boolean resourceBundleDownloaded = false;
 	private boolean wroteInstantiationLog = false;
 	private File credentialsFile = null;
 	private StringBuilder jobSummaries = new StringBuilder();
-	private String[] environment = null;
 	private long totalRunTime = 0;
 	private String date = null;
 
@@ -113,7 +116,7 @@ public class JobRunner {
 		
 		try {
 			long startTimeTotal = System.currentTimeMillis();
-			
+		
 			processArgs(args);
 
 			loadCredentials();
@@ -151,7 +154,7 @@ public class JobRunner {
 		while (true) {
 
 			//fetch next job
-			for (int i=0; i< 60; i++) {
+			for (int i=0; i< minToWait; i++) {
 				workingJob = fetchJob();
 				//not null, ready to go so break out of loop
 				if (workingJob != null) break;
@@ -162,7 +165,7 @@ public class JobRunner {
 				}
 				//just wait 1 min, then look again
 				else {
-					pl("\tNo jobs, waiting "+(59-i)+"m...");
+					pl("\tNo jobs, waiting "+(minToWait-i)+"m...");
 					Thread.currentThread().sleep(1000*60);
 				}
 			}
@@ -195,13 +198,22 @@ public class JobRunner {
 			else deleteAndCopyLocalJobDirWithS3JobDir();
 			
 			long diffTime = Math.round(((double)(System.currentTimeMillis() -startTime))/60000);
-			jobSummaries.append(workingJob.getS3UrlRunningJobPath()+workingJob.getScriptFileName()+"\t"+diffTime+"\t"+message+"\n");
-			
-			pl("\n----------------------- Job "+workingJob.getS3UrlRunningJobPath()+" finished in "+diffTime+" min, status: "+message+"   -----------------------");
+			String cost = fetchCost(diffTime);
+			jobSummaries.append(workingJob.getS3UrlRunningJobPath()+workingJob.getScriptFileName()+"\t"+diffTime+"\t$"+cost+"\t"+message+"\n");
+		
+			pl("\n----------------------- Job "+workingJob.getS3UrlRunningJobPath()+" finished in "+diffTime+" min, $"+cost+", status: "+message+"   -----------------------");
 			
 			cleanUpWorkingJob();
 		}
-		
+	}
+	
+	private String fetchCost(double min) {
+		String dollars = "NA";
+		if (spotPrice !=0) {
+			double cost = min/60.0 * spotPrice;
+			dollars = Util.formatNumber(cost, 2);
+		}
+		return dollars;
 	}
 
 	private void cleanUpWorkingJob() throws Exception {
@@ -217,11 +229,10 @@ public class JobRunner {
 
 
 	private void writeSummaryStats() {
-		pl("\nJob Summary Statistics:\n\nJob Name\tRun Time (min)\tExit Status");
+		pl("\nJob Summary Statistics:\n\nJob Name\tRun Time (min)\tSpot Cost\tExit Status");
 		pl(jobSummaries.toString());
-		
 		pl("Total Run Time (min):\t"+totalRunTime);
-		
+		pl("Total Spot Cost ($"+spotPrice+"/hr):\t$"+fetchCost(totalRunTime));
 	}
 	
 	private void makeS3JobRequest(JRJob jrJob) throws Exception {
@@ -240,6 +251,50 @@ public class JobRunner {
 		//this should not fail unless a major problem occurs
 		throw new IOException("\tFailed to upload job request "+requestFileName+" to "+jrJob.getS3UrlRunningJobPath());
 	}
+	
+	private double fetchSpotPrice(long currentTime) throws IOException {
+		
+		Long seconds = currentTime/1000L;
+
+		//testing?
+		if (testing) {
+			instanceType="c5.9xlarge";
+			availabilityZone="us-west-2d";
+		}
+		
+		String[] cmd = {awsPath, "ec2", "describe-spot-price-history", 
+				"--instance-types", instanceType,
+				"--availability-zone", availabilityZone,
+				"--start-time", seconds.toString(),
+				"--product-descriptions", "Linux/UNIX",
+				"--query", "SpotPriceHistory[*].{price:SpotPrice}"};
+
+		String[] results = executeViaProcessBuilder(cmd, false, null);
+		String priceLine = null;
+		for (String l: results) {
+			if (l.contains("price")) {
+				priceLine = l.trim();
+				break;
+			}
+		}
+		if (priceLine == null) {
+			pl("\tWARNING: Failed to pull a spot price for this instance with cmd "+ Util.stringArrayToString(cmd, " ")+", error output "+Util.stringArrayToString(results, " "));
+			return 0;
+		}
+
+		//parse it "price": "0.579500"
+		String[] fields = Util.COLON.split(priceLine);
+		String price = fields[1].trim().replaceAll("\"", "");
+		
+		//testing?
+		if (testing) {
+			instanceType=null;
+			availabilityZone=null;
+		}
+		
+		return Double.parseDouble(price);
+	}
+	
 	
 	private void writeS3JobRunning(JRJob jrJob) throws Exception {
 		String jobRunningFileName = jrJob.getScriptFileName()+jobRunning+hostName;
@@ -301,21 +356,16 @@ public class JobRunner {
 	
 
 	/*writeNodeLogCode 0=noWrite, 1=error, 2=complete*/
-	private void shutDown(int exitCode) throws Exception {
-
-		//delete the working directory? not needed this is done by AWS, the individual job dirs are deleted
-		//Util.deleteDirectory(workDirectory);
+	private void shutDown(int ec) throws Exception {
+		exitCode = ec;
 		
 		// this will system exit
 		if (availabilityZone != null && terminateInstance) {
 			String[] cmd = new String[]{awsPath, "ec2", "terminate-instances", "--instance-ids", instanceId};
 			executeReturnExitCode(cmd, false, true, null);
 		}
-		
-		//remove the credentials dir
-		if (awsCredentialsDir != null) Util.deleteDirectory(awsCredentialsDir);
-		
-		System.exit(exitCode);
+		Util.pl("\tComplete");
+		if (testing == false) System.exit(ec);
 	}
 
 	private void writeInstantiationLog() throws Exception {
@@ -550,6 +600,8 @@ public class JobRunner {
 				}
 				if (othersFound == false) {
 					String jobScript = jobStartScript.replace(jobStartSuffix, "");
+					
+
 					//look for the actual job script
 					boolean jsFound = false;
 					for (String fileName: files) {
@@ -575,9 +627,19 @@ public class JobRunner {
 	private HashMap<String, ArrayList<String>> listFilesInS3DirRecursive (String s3DirUri) throws IOException{
 		String[] cmd = {awsPath, "s3", "ls", s3DirUri, "--recursive"};
 		String[] out = executeViaProcessBuilder(cmd, false, null);
-		
+		//results returned are always the full uri name minus the bucketName
+		//if bucket is s3://hcibioinfo-jobrunner/xxx/yyy/zzz.txt  returns xxx/yyy/zzz.txt
+
 		HashMap<String, ArrayList<String>> fileDirFiles = new HashMap<String, ArrayList<String>>();
 		
+		//find bucket name
+		String bucketName = s3DirUri.replaceFirst("s3://", "");
+		bucketName = "s3://"+bucketName.substring(0, bucketName.indexOf("/")+1);
+		
+		//find extra off bucketName
+		String preTrimmer = s3DirUri.replace(bucketName, "");
+		
+		//find extra on the bucket name from the s3DirUri, use this to substract off each path name to make it relative to the s3DirUri
 		for (String s: out) {
 			s= s.trim();
 			//empty
@@ -586,9 +648,12 @@ public class JobRunner {
 			if (s.startsWith("PRE ")) continue;
 			String[] fields = Util.WHITESPACE.split(s);
 			String pathName = fields[fields.length-1];
-			int firstSlash = pathName.indexOf("/") +1;
+			
+			//int firstSlash = pathName.indexOf("/") +1;
 			int lastSlash = pathName.lastIndexOf("/") +1;
-			String dirPath = pathName.substring(firstSlash, lastSlash);
+			//String dirPath = pathName.substring(firstSlash, lastSlash);
+			String dirPath = pathName.replaceFirst(preTrimmer, "");
+			dirPath = dirPath.substring(0, dirPath.lastIndexOf("/")+1);
 			String fileName = pathName.substring(lastSlash);
 			ArrayList<String> names = fileDirFiles.get(dirPath);
 			if (names == null) {
@@ -597,6 +662,7 @@ public class JobRunner {
 			}
 			names.add(fileName);
 		}
+		
 		return fileDirFiles;
 	}
 	
@@ -746,28 +812,35 @@ public class JobRunner {
 	private void loadCredentials() throws IOException {
 		pl("\nDownloading the aws credentials...");
 
-		//it's important to not place this in the work directory since this can be a persistent mount
-		awsCredentialsDir = new File (System.getProperty("user.home")+"/.aws");
+		if (awsCredentialsDir == null) awsCredentialsDir = new File (System.getProperty("user.home")+"/.aws");
 		awsCredentialsDir.mkdirs();
 		if (awsCredentialsDir.exists() == false) throw new IOException("Error: failed to make "+awsCredentialsDir+" for saving the aws credentials file");
 		credentialsFile = new File (awsCredentialsDir, "credentials").getCanonicalFile();
-		credentialsFile.deleteOnExit();
-
-		//fetch the file with curl
-		String[] cmd = {"curl", credentialsUrl, "-o", credentialsFile.toString(), "-s", "-S"};
-		String[] out = executeViaProcessBuilder(cmd, false, null);
-		if (credentialsFile.exists() == false) {
-			for (String s: out) el(s);
-			throw new IOException("Failed to download the aws credentials from -> "+credentialsUrl);
+		
+		//check if it exists
+		if (credentialsFile.exists()) {
+			pl("\tWARNING: aws credentials file already exists in "+credentialsFile+", skipping credentials download.");
 		}
+		else {
+			//fetch the file with curl
+			String[] cmd = {"curl", credentialsUrl, "-o", credentialsFile.toString(), "-s", "-S"};
+			String[] out = executeViaProcessBuilder(cmd, false, null);
+			if (credentialsFile.exists() == false) {
+				for (String s: out) el(s);
+				throw new IOException("Failed to download the aws credentials from -> "+credentialsUrl);
+			}
 
-		//check it, the downloaded file might be a error message from AWS about expired 
-		String[] lines = Util.loadTxtFile(credentialsFile);
-		int keyCount = 0;
-		for (String l: lines) if (l.contains("aws_access_key_id")) keyCount++;
-		String merged = Util.stringArrayToString(lines, "\n\t");
-		if (keyCount !=1 || merged.contains("region") == false || merged.contains("aws_access_key_id") == false || merged.contains("aws_secret_access_key") == false) {
-			throw new IOException("\tError: the credential file is malformed -> "+credentialsUrl+ "\n\t"+merged+"\n\tSee the JobRunner help menu.");
+			//check it, the downloaded file might be a error message from AWS about expired 
+			String[] lines = Util.loadTxtFile(credentialsFile);
+			int keyCount = 0;
+			for (String l: lines) if (l.contains("aws_access_key_id")) keyCount++;
+			String merged = Util.stringArrayToString(lines, "\n\t");
+			if (keyCount !=1 || merged.contains("region") == false || merged.contains("aws_access_key_id") == false || merged.contains("aws_secret_access_key") == false) {
+				throw new IOException("\tError: the credential file is malformed -> "+credentialsUrl+ "\n\t"+merged+"\n\tSee the JobRunner help menu.");
+			}
+			
+			//since it was downloaded, mark it for deletion upon exit
+			credentialsFile.deleteOnExit();
 		}
 
 		//set env var for the aws cli 
@@ -775,10 +848,14 @@ public class JobRunner {
 
 
 		//TODO: Only needed in Eclipse
-		//envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
-		//awsPath="/usr/local/bin/aws";
-
-
+		if (hostName.endsWith("local") || hostName.contains("utah")) {
+			envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
+			awsPath="/usr/local/bin/aws";
+		}
+		
+		//fetch the spot price
+		spotPrice = fetchSpotPrice(System.currentTimeMillis());
+		
 	}
 	
 
@@ -796,14 +873,16 @@ public class JobRunner {
 				try{
 					switch (test){
 					case 'd': workDirectory = new File(args[++i]).getCanonicalFile(); break;
+					case 'a': awsCredentialsDir = new File(args[++i]).getCanonicalFile(); break;
 					case 'r': resourceS3Uri = args[++i]; break;
 					case 'c': credentialsUrl = args[++i]; break;
 					case 'j': jobsS3Uri = args[++i]; break;
 					case 'l': logsS3Uri = args[++i]; break;
 					case 't': terminateInstance = true; break;
-					//case 'e': ebsSize = Integer.parseInt(args[++i]); break;
+					case 'w': minToWait = Integer.parseInt(args[++i]); break;
 					case 'v': verbose = true; break;
 					case 'x': syncDirs = false; break;
+					case 'i': testing = true; break;
 					case 'h': printDocs(); System.exit(0);
 					default: Util.printExit("\nProblem, unknown option! " + mat.group());
 					}
@@ -859,9 +938,6 @@ public class JobRunner {
 			//date
 			date = Util.getDateTime("-");
 			
-			//env		
-			environment = executeViaProcessBuilder(new String[]{"env"}, false, null);
-			
 			//num proc
 			try {
 				out = executeViaProcessBuilder(new String[]{"nproc"}, false, null);
@@ -899,18 +975,6 @@ public class JobRunner {
 			}
 			else hostName = InetAddress.getLocalHost().getHostName();
 			
-			/*
-			out = executeViaProcessBuilder(new String[]{"ec2metadata", "--availability-zone", "--instance-id", "--instance-type"}, false);
-			if (out!= null && out.length == 3) {
-				availabilityZone = out[0];
-				instanceId = out[1];
-				hostName = instanceId;
-				instanceType = out[2];
-			}
-			else hostName = InetAddress.getLocalHost().getHostName();
-			*/
-
-			
 		} catch (IOException e) {
 			pl("ERROR fetching host information\n");
 			if (verbose) pl(Util.getStackTrace(e));
@@ -927,6 +991,7 @@ public class JobRunner {
 		pl("  -l Node Logs S3 URI    : "+ logsS3Uri);
 		pl("  -d Local work dir      : "+ workDirectory);
 		pl("  -t Terminate node on exit    : "+ terminateInstance);
+		pl("  -w Min 2 wait before exit    : "+ minToWait);
 		pl("  -x Replace S3 job with local : "+ (syncDirs==false));
 
 		pl("\nJob Runner Info:");
@@ -942,24 +1007,18 @@ public class JobRunner {
 			pl("  Instance Type          : "+ instanceType);
 			pl("  Terminate upon exit    : "+ terminateInstance);
 		}
-		
-		if (verbose && environment != null) {
-			pl("\nEnvironment:");
-			for (String s: environment) pl("  "+s);
-		}
-		
-		
 	}
 
 	public static void printDocs(){
 		System.out.println("\n" +
 				"****************************************************************************************************************************\n" +
-				"**                                              AWS Job Runner : November 2021                                            **\n" +
+				"**                                              AWS Job Runner : December 2021                                            **\n" +
 				"****************************************************************************************************************************\n" +
 				"JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed your resource bundle and looks for\n"+
 				"xxx.sh_JR_START files in your S3 Jobs directories. For each, it copies over the directory contents, executes the\n"+
 				"associated xxx.sh script, and transfers back the results.  This is repeated until no un run jobs are found. Launch many\n"+
-				"EC2 JR nodes, each running the an instance of the JR, to process hundreds of jobs in parallel.\n"+
+				"EC2 JR nodes, each running the an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and\n"+
+				"hibernation to reduce costs.\n"+
 				
 				"\nTo use:\n"+
 				"1) Install and configure the aws cli on your local workstation, see https://aws.amazon.com/cli/\n"+
@@ -987,7 +1046,9 @@ public class JobRunner {
 				
 				"\nDefault Options:\n"+
 				"-d Directory on the local worker node, full path, in which resources and job files will be processed, defaults to /JRDir/\n"+
-				"-t Terminate the EC2 node upon job completion or node error. Defaults to leaving the JobRunner looking for jobs for an hour.\n"+
+				"-a Aws credentials directory, defaults to ~/.aws/\n"+
+				"-t Terminate the EC2 node upon job completion. Defaults to looking for jobs for the min2Wait.\n"+
+				"-w Minutes to wait when jobs are not found before termination, defaults to 10.\n"+
 				"-x Replace S3 job directories with processed analysis, defaults to syncing local with S3. WARNING, if selected, don't place\n"+
 				"     any files in these S3 jobs directories that cannot be replaced. JR will delete them.\n"+
 				"-v Verbose debugging output.\n"+
@@ -1002,6 +1063,10 @@ public class JobRunner {
 
 				"****************************************************************************************************************************\n");
 
+	}
+
+	public int getExitCode() {
+		return exitCode;
 	}
 
 
