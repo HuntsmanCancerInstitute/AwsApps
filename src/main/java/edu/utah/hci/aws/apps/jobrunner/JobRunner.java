@@ -1016,8 +1016,8 @@ public class JobRunner {
 				"****************************************************************************************************************************\n" +
 				"JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed your resource bundle and looks for\n"+
 				"xxx.sh_JR_START files in your S3 Jobs directories. For each, it copies over the directory contents, executes the\n"+
-				"associated xxx.sh script, and transfers back the results.  This is repeated until no un run jobs are found. Launch many\n"+
-				"EC2 JR nodes, each running the an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and\n"+
+				"associated xxx.sh script, and transfers back the results.  This is repeated until no unrun jobs are found. Launch many\n"+
+				"EC2 JR nodes, each running an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and\n"+
 				"hibernation to reduce costs.\n"+
 				
 				"\nTo use:\n"+
@@ -1026,7 +1026,7 @@ public class JobRunner {
 				"     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt\n"+
 				"3) Generate a secure 24hr timed URL for the credentials file, e.g.\n"+
 				"     aws --region us-west-2  s3 presign s3://my-jr/aws.cred.txt  --expires-in 259200\n"+
-				"4) Upload a zip archive containing resources to run your jobs into S3, e.g.\n"+
+				"4) Upload a zip archive containing resources needed to run your jobs into S3, e.g.\n"+
 				"     aws s3 cp ~/TNRunnerResourceBundle.zip s3://my-jr/TNRunnerResourceBundle.zip\n"+
 				"     This will be copied into the /JRDir/ directory and then unzipped.\n"+
 				"5) Upload script and job files into a 'Jobs' directory on S3, e.g.\n"+
