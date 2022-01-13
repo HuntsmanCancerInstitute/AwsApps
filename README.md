@@ -128,4 +128,45 @@ Example: java -jar -Xmx1G JobRunner.jar
      -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMXXX...'
 
 ****************************************************************************************************************************
+
+
+
+u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/VersionManager_0.1.jar 
+
+**************************************************************************************
+**                             AWS S3 Version Manager : January 2022                **
+**************************************************************************************
+Bucket versioning in S3 protects objects from being deleted or overwritten by hiding
+the original when 'deleting' or over writing an existing object. Use this tool to 
+delete these hidden S3 objects and any deletion marks from your buckets. Use the
+options to select particular redundant objects to delete in a dry run, review the
+actions, and rerun it with the -r option to actually delete them. This app will not
+delete any isLatest=true object.
+
+WARNING! This app has the potential to destroy precious data. TEST IT on a
+pilot system before deploying in production. Although extensively unit tested, this
+app is provided with no guarantee of proper function.
+
+To use the app:
+1) Enable S3 Object versioning on your bucket.
+2) Install and configure the aws cli with your region, access and secret keys. See
+   https://aws.amazon.com/cli
+3) Use cli commands like 'aws s3 rm s3://myBucket/myObj.txt' or the AWS web Console to
+   'delete' particular objects. Then run this app to actually delete them.
+
+Required Parameters:
+-b Versioned S3 bucket name
+
+Optional Parameters:
+-r Perform a real run, defaults to a dry run where no objects are deleted
+-c Credentials profile name, defaults to 'default'
+-a Minimum age, in days, of object to delete, defaults to 30
+-s Object key suffixes to delete, comma delimited, no spaces
+-p Object key prefixes to delete, comma delimited, no spaces
+-q Quiet output.
+
+Example: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test 
+     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab 
+
+**************************************************************************************
 </pre>
