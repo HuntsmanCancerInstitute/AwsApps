@@ -131,7 +131,7 @@ Example: java -jar -Xmx1G JobRunner.jar
 
 
 
-u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/VersionManager_0.1.jar 
+u0028003$ java -jar ~/Code/AwsApps/target/VersionManager_0.1.jar 
 
 **************************************************************************************
 **                             AWS S3 Version Manager : January 2022                **
@@ -156,6 +156,7 @@ To use the app:
 
 Required Parameters:
 -b Versioned S3 bucket name
+-l Bucket region location
 
 Optional Parameters:
 -r Perform a real run, defaults to a dry run where no objects are deleted
@@ -166,7 +167,7 @@ Optional Parameters:
 -q Quiet output.
 
 Example: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test 
-     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab 
+     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab -l us-west-2
 
 **************************************************************************************
 </pre>
