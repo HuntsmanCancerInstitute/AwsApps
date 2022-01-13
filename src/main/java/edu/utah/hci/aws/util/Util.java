@@ -15,6 +15,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.text.NumberFormat;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -51,10 +52,11 @@ public class Util {
 	
 	public static double gigaBytes(File file) {
 		double bytes = file.length();
-		double kilobytes = (bytes / 1024);
-		double megabytes = (kilobytes / 1024);
-		double gigabytes = (megabytes / 1024);
-		return gigabytes;
+		return gigaBytes(bytes);
+	}
+	
+	public static double gigaBytes(double bytes) {
+		return bytes / 1073741824.0;
 	}
 	
 	public static int ageOfFileInDays (File f) throws IOException {
@@ -63,6 +65,14 @@ public class Util {
 		long now = System.currentTimeMillis();
 		long diff = now - ft;
 		return (int) millisecToDays(diff);
+	}
+	
+	public static double daysOld(Instant i) {
+		long secLastMod = i.getEpochSecond();
+		long secNow = Instant.now().getEpochSecond();
+		long secOld = secNow - secLastMod;
+		if (secOld < 0) return 0.0;
+		return (double)secOld/86400.0;
 	}
 	
 	/**Parses a file containing key = value lines into a HashMap.

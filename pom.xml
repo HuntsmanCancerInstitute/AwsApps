@@ -1,3 +1,4 @@
+<!-- changing the aws-java-sdk-bom and aws-java-sdk-s3 from 1.11.589 to 1.12.132; software.amazon.awssdk from 2.15.0 to 2.17.103 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>edu.utah.hci</groupId>
@@ -10,8 +11,15 @@
   		<dependency>
   			<groupId>com.amazonaws</groupId>
   			<artifactId>aws-java-sdk-bom</artifactId>
-  			<version>1.11.589</version>
+  			<version>1.12.132</version>
   		</dependency>
+  		<dependency>
+    <groupId>software.amazon.awssdk</groupId>
+    <artifactId>bom</artifactId>
+    <version>2.17.103</version>
+    <type>pom</type>
+    <scope>import</scope>
+   </dependency>
   	</dependencies>
   </dependencyManagement>
   <dependencies>
@@ -23,7 +31,7 @@
   	<dependency>
   		<groupId>com.amazonaws</groupId>
   		<artifactId>aws-java-sdk-s3</artifactId>
-  		<version>1.11.589</version>
+  		<version>1.12.132</version>
   	</dependency>
   	  	<dependency>
   		<groupId>junit</groupId>
@@ -35,6 +43,22 @@
   	  		<artifactId>javax.mail</artifactId>
   	  		<version>1.6.0</version>
   	  	</dependency>
+  	  <dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>dynamodb</artifactId>
+  </dependency>
+  <dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>iam</artifactId>
+  </dependency>
+  <dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>kinesis</artifactId>
+  </dependency>
+  <dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>s3</artifactId>
+  </dependency>
   </dependencies>
   <properties>
   	<maven.compiler.source>1.8</maven.compiler.source>

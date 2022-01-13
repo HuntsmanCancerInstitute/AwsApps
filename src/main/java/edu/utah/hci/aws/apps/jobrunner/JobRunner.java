@@ -1038,7 +1038,7 @@ public class JobRunner {
 				"     aws s3 cp s3://my-jr/emptyFile s3://my-jr/Jobs/A/dnaAlignQC.sh_JR_START\n"+
 				"8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See https://ri-confluence.hci.utah.edu/x/gYCgBw\n"+
 
-				"\nJob Runner Options:\n"+
+				"\nJob Runner Required Options:\n"+
 				"-c URL to your secure timed config credentials file.\n"+
 				"-r S3URI to your zipped resource bundle.\n"+
 				"-j S3URI to your root Jobs directory containing folders with job scripts to execute.\n"+
@@ -1053,7 +1053,7 @@ public class JobRunner {
 				"     any files in these S3 jobs directories that cannot be replaced. JR will delete them.\n"+
 				"-v Verbose debugging output.\n"+
 
-				"\nExample: java -jar -Xmx1G JobRunner.jar\n"+
+				"\nExample: java -jar -Xmx1G JobRunner.jar -x -t \n"+
 				"     -r s3://my-jr/TNRunnerResourceBundle.zip\n"+
 				"     -j s3://my-jr/Jobs/\n"+
 				"     -l s3://my-jr/NodeLogs/\n"+
