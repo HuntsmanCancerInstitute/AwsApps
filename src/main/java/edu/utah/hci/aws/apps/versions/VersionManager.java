@@ -469,23 +469,24 @@ public class VersionManager {
 				"**************************************************************************************\n" +
 				"**                             AWS S3 Version Manager : January 2022                **\n" +
 				"**************************************************************************************\n" +
-				"VM deletes versioned S3 objects and deletion marks from versioned AWS buckets. Use the\n"+
-				"options to select particular objects to delete in a dry run, review the potential\n"+
-				"actions, and re run it with the -r option to actually delete them. VM will not delete\n"+
-				"any isLatest=true object. Use the AWS CLI to do this before running VM.\n"+
+				"Bucket versioning in S3 protects objects from being deleted or overwritten by hiding\n"+
+				"the original when 'deleting' or over writing an existing object. Use this tool to \n"+
+				"delete these hidden S3 objects and any deletion marks from your buckets. Use the\n"+
+				"options to select particular redundant objects to delete in a dry run, review the\n"+
+				"actions, and rerun it with the -r option to actually delete them. This app will not\n"+
+				"delete any isLatest=true object.\n"+
 
 				"\nWARNING! This app has the potential to destroy precious data. TEST IT on a\n"+
 				"pilot system before deploying in production. Although extensively unit tested, this\n"+
 				"app is provided with no guarantee of proper function.\n"+
 
 				"\nTo use the app:\n"+ 
-				"1) Enable S3 Object versioning on your bucket. Add lifecycle rules to\n"+
-				"   AbortIncompleteMultipartUpload and move objects to Deep Glacier on an appropriate\n"+
-				"   schedule.\n"+
+				"1) Enable S3 Object versioning on your bucket.\n"+
 				"2) Install and configure the aws cli with your region, access and secret keys. See\n"+
 				"   https://aws.amazon.com/cli\n"+
-				"3) Use the 'aws s3 rm s3://myBucket/myObj.txt' cmd or the AWS GUI Console to mark and\n"+
-				"   hide select objects then run this app to actually delete them.\n"+
+				"3) Use cli commands like 'aws s3 rm s3://myBucket/myObj.txt' or the AWS web Console to\n"+
+				"   'delete' particular objects. Then run this app to actually delete them.\n"+
+				
 
 				"\nRequired Parameters:\n"+
 				"-b Versioned S3 bucket name\n"+
