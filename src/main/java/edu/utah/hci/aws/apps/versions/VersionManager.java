@@ -427,6 +427,7 @@ public class VersionManager {
 				char test = args[i].charAt(1);
 				switch (test){
 				case 'b': bucketName = args[++i]; break;
+				case 'l': region = args[++i]; break;
 				case 'c': profile = args[++i]; break;
 				case 'a': minDaysOld = Integer.parseInt(args[++i]); break;
 				case 's': suffixes = Util.COMMA.split(args[++i]); break;
@@ -446,7 +447,10 @@ public class VersionManager {
 		}
 
 		//pull region from credentials
-		region = Util.getRegionFromCredentials();
+		if (region == null) {
+			el("\nError: please provide the region location of the bucket, e.g. us-west-2 \n");
+			System.exit(1);
+		}
 
 		printOptions();
 
@@ -456,7 +460,8 @@ public class VersionManager {
 	private void printOptions() {
 		pl("Options:");
 		pl("  -c Credentials profile name : "+ profile);
-		pl("  -b Bucket name and region   : "+ bucketName +" in "+region);
+		pl("  -b Bucket name              : "+ bucketName);
+		pl("  -l Bucket region            : "+ region);
 		pl("  -s Obj key suffixes         : "+ Util.stringArrayToString(suffixes, ","));
 		pl("  -p Obj key prefixes         : "+ Util.stringArrayToString(prefixes, ","));
 		pl("  -a Min age, days            : "+ minDaysOld);
@@ -490,6 +495,7 @@ public class VersionManager {
 
 				"\nRequired Parameters:\n"+
 				"-b Versioned S3 bucket name\n"+
+				"-l Bucket region location\n"+
 
 				"\nOptional Parameters:\n" +
 				"-r Perform a real run, defaults to a dry run where no objects are deleted\n"+
@@ -500,7 +506,7 @@ public class VersionManager {
 				"-q Quiet output.\n"+
 
 				"\nExample: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test \n"+
-				"     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab \n\n"+
+				"     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab -l us-west-2\n\n"+
 
 				"**************************************************************************************\n");
 	}

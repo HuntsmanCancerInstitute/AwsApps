@@ -29,6 +29,7 @@ public class TestVersionManager {
 
 	/**Be sure this bucket exists, is private, versioning enabled, and doesn't contain anything you care about. WARNING, it will be emptied!*/
 	private static final String bucketName = "hcibioinfo-nix-test";
+	private static final String bucketRegion = "us-west-2";
 
 	/**Directory in the AwsApps project containing the JobRunner test files. */
 	private static final File testDataDir = new File("/Users/u0028003/Code/AwsApps/TestData/VersionManager");
@@ -59,7 +60,7 @@ public class TestVersionManager {
 	public void testDefaultParams() {
 		try {
 			//this is actually age >= 7 days
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-l", bucketRegion});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -77,7 +78,7 @@ public class TestVersionManager {
 	public void testAgeZero() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0"});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-l", bucketRegion});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -95,7 +96,7 @@ public class TestVersionManager {
 	public void testPrefix() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-p", "Larry,Delme,Susan"});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-p", "Larry,Delme,Susan", "-l", bucketRegion});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -113,7 +114,7 @@ public class TestVersionManager {
 	public void testSuffix() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-s", "Larry,.delme,Susan"});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-s", "Larry,.delme,Susan", "-l", bucketRegion});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -131,7 +132,7 @@ public class TestVersionManager {
 	public void testZDelete() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-r"});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-r", "-l", bucketRegion});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -155,7 +156,7 @@ public class TestVersionManager {
 		if (exitCode !=0) return false;
 		
 		//use the VersionManager to delete everything
-		VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-r", "-a", "0", "-q"});
+		VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-r", "-a", "0", "-q", "-l", bucketRegion});
 		exitCode = vm.getExitCode();
 		
 		if (exitCode == 0) return true;
@@ -209,14 +210,6 @@ public class TestVersionManager {
 		
 		return true;
 	}
-
-	/*
-	public void setPaths() throws Exception {
-		if (envPropToAdd == null) {
-			envPropToAdd = new HashMap <String, String>();
-			envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
-		}
-	}*/
 
 	public static void p(String s) {
 		System.out.println(s);

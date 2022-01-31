@@ -38,14 +38,19 @@
   		<artifactId>junit</artifactId>
   		<version>4.13.1</version>
   	</dependency>
-  	  	<dependency>
-  	  		<groupId>com.sun.mail</groupId>
-  	  		<artifactId>javax.mail</artifactId>
-  	  		<version>1.6.0</version>
-  	  	</dependency>
-  	  <dependency>
-   <groupId>software.amazon.awssdk</groupId>
-   <artifactId>dynamodb</artifactId>
+  	<dependency>
+  	  	<groupId>com.sun.mail</groupId>
+  	  	<artifactId>javax.mail</artifactId>
+  	  	<version>1.6.0</version>
+  	</dependency>  	
+  	<dependency>
+    	<groupId>com.googlecode.json-simple</groupId>
+    	<artifactId>json-simple</artifactId>
+    	<version>1.1.1</version>
+	</dependency>
+  	<dependency>
+   		<groupId>software.amazon.awssdk</groupId>
+   		<artifactId>dynamodb</artifactId>
   </dependency>
   <dependency>
    <groupId>software.amazon.awssdk</groupId>

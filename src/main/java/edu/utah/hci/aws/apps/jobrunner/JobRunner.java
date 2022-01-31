@@ -9,10 +9,14 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
 import edu.utah.hci.aws.util.Util;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 
 
 /**Looks for bash scripts in a particular s3 bucket, reanames each, downloads, and runs, and transfers back jobs results 
@@ -75,7 +79,7 @@ public class JobRunner {
 	private boolean verbose = false;
 	private boolean syncDirs = true;
 	private boolean terminateInstance = false;
-	private int minToWait = 60;
+	private int minToWait = 10;
 	private boolean testing = false;
 
 	//internal fields
@@ -86,8 +90,10 @@ public class JobRunner {
 	private String ram = "NA";
 	private String availableDisk = "NA";
 	private String availabilityZone = null;
+	private String region = null;
 	private String instanceId = null;
 	private String instanceType = null;
+	private String spotId = null;
 	private double spotPrice = 0;
 	private String awsPath = "aws";
 	private StringBuilder hostLog = new StringBuilder();
@@ -120,8 +126,12 @@ public class JobRunner {
 			processArgs(args);
 
 			loadCredentials();
-
+			
 			checkAwsCli();
+			
+			loadHostInfo();
+			loadSpotInfo();
+			printHostInfo();
 
 			checkResourceBundle();
 			
@@ -262,7 +272,7 @@ public class JobRunner {
 			availabilityZone="us-west-2d";
 		}
 		
-		String[] cmd = {awsPath, "ec2", "describe-spot-price-history", 
+		String[] cmd = {awsPath, "--region", region, "ec2", "describe-spot-price-history", 
 				"--instance-types", instanceType,
 				"--availability-zone", availabilityZone,
 				"--start-time", seconds.toString(),
@@ -359,9 +369,17 @@ public class JobRunner {
 	private void shutDown(int ec) throws Exception {
 		exitCode = ec;
 		
+		//kill the spot request
+		if (spotId != null) {
+			if (verbose) pl ("Canceling spot request...");
+			String[] cmd = new String[]{awsPath, "--region", region, "ec2", "cancel-spot-instance-requests", "--spot-instance-request-ids", spotId};
+			executeReturnExitCode(cmd, false, true, null);
+		}
+		
 		// this will system exit
 		if (availabilityZone != null && terminateInstance) {
-			String[] cmd = new String[]{awsPath, "ec2", "terminate-instances", "--instance-ids", instanceId};
+			if (verbose) pl ("Terminating instance...");
+			String[] cmd = new String[]{awsPath, "--region", region, "ec2", "terminate-instances", "--instance-ids", instanceId};
 			executeReturnExitCode(cmd, false, true, null);
 		}
 		Util.pl("\tComplete");
@@ -833,11 +851,18 @@ public class JobRunner {
 			//check it, the downloaded file might be a error message from AWS about expired 
 			String[] lines = Util.loadTxtFile(credentialsFile);
 			int keyCount = 0;
-			for (String l: lines) if (l.contains("aws_access_key_id")) keyCount++;
+//String regionLine = null; //region = us-west-2
+			for (String l: lines) {
+				if (l.contains("aws_access_key_id")) keyCount++;
+//if (l.contains("region")) regionLine = l;
+			}
 			String merged = Util.stringArrayToString(lines, "\n\t");
 			if (keyCount !=1 || merged.contains("region") == false || merged.contains("aws_access_key_id") == false || merged.contains("aws_secret_access_key") == false) {
-				throw new IOException("\tError: the credential file is malformed -> "+credentialsUrl+ "\n\t"+merged+"\n\tSee the JobRunner help menu.");
+				throw new IOException("\tError: the credential file is malformed, does it have just one set of credentials? with region, aws_access_key_id, and aws_secret_access_key? -> "+credentialsUrl+"\n\tSee the JobRunner help menu.");
 			}
+			
+//String[] splitRegionLine = Util.EQUALS.split(regionLine);
+//region = splitRegionLine[1].trim();
 			
 			//since it was downloaded, mark it for deletion upon exit
 			credentialsFile.deleteOnExit();
@@ -848,13 +873,10 @@ public class JobRunner {
 
 
 		//TODO: Only needed in Eclipse
-		if (hostName.endsWith("local") || hostName.contains("utah")) {
+		if (testing) {
 			envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
 			awsPath="/usr/local/bin/aws";
 		}
-		
-		//fetch the spot price
-		spotPrice = fetchSpotPrice(System.currentTimeMillis());
 		
 	}
 	
@@ -892,26 +914,18 @@ public class JobRunner {
 				}
 			}
 		}
-		
+
 		//work directory, need this to find RAM on machine
 		if (workDirectory == null) {
 			throw new IOException("Error: failed to find your -t temporary local work directory.");
 		}
-		
+
 		workDirectory.mkdirs();
 		if (workDirectory.exists() == false || workDirectory.canWrite() == false) {
 			throw new IOException("Error: failed to find a writable work directory -> "+ workDirectory);
 		}
 		tmpDirectory = new File (workDirectory, "TmpDir");
 		tmpDirectory.mkdir();
-		
-		//set node info
-		loadHostInfo();
-		
-		//add workingDir to env
-		envPropToAdd.put("JR_WORKING_DIR", workDirectory.getCanonicalPath());
-
-		printParams();
 
 		// required args?
 		if (resourceS3Uri == null || credentialsUrl == null || jobsS3Uri == null || logsS3Uri == null) {
@@ -928,8 +942,49 @@ public class JobRunner {
 		}
 		if (resourceS3Uri.endsWith(".zip") == false) throw new IOException("Error: the zip resource S3Uri must end with xxx.zip, see "+resourceS3Uri);	
 
-	}	
+		//add workingDir to env
+		envPropToAdd.put("JR_WORKING_DIR", workDirectory.getCanonicalPath());
+		
+		printParams();
 
+	}	
+	
+	private void loadSpotInfo() {
+		String jsonString = null;
+		try {
+			if (instanceId == null) return;
+			
+			
+			//fetch the spot price
+			spotPrice = fetchSpotPrice(System.currentTimeMillis());
+			
+			String[] cmd = {awsPath, "--region", region, "ec2", "describe-spot-instance-requests"};	
+
+			String[] out = executeViaProcessBuilder(cmd, false, null);
+			
+			jsonString = Util.stringArrayToString(out, " ");
+			Object obj = new JSONParser().parse(jsonString);
+			JSONObject jo = (JSONObject) obj;
+			JSONArray ja = (JSONArray) jo.get("SpotInstanceRequests");
+
+			Iterator<JSONObject> it = ja.iterator();
+			while (it.hasNext()) {
+				JSONObject sr = it.next();
+				String iid = sr.get("InstanceId").toString();
+				if (iid.equals(instanceId)) {
+					spotId = sr.get("SpotInstanceRequestId").toString();
+					return;
+				}
+			}
+			throw new Exception();
+		} catch (Exception e) {
+			el("\nFailed to fetch spot information for "+instanceId+" from ->\n"+jsonString+"\n"+Util.getStackTrace(e));
+			e.printStackTrace();
+			try {
+				shutDown(1);
+			} catch (Exception e1) {}
+		}
+	}
 	/*Attempt to get machine info, doesn't work on a mac*/
 	private void loadHostInfo() throws UnknownHostException {
 		
@@ -969,6 +1024,7 @@ public class JobRunner {
 			} catch (Exception e) {}
 			if (out!= null && out.length == 3) {
 				availabilityZone = Util.WHITESPACE.split(out[0])[1];
+				region = availabilityZone.substring(0, availabilityZone.length()-1);
 				instanceId = Util.WHITESPACE.split(out[1])[1];
 				hostName = instanceId;
 				instanceType = Util.WHITESPACE.split(out[2])[1];
@@ -991,9 +1047,12 @@ public class JobRunner {
 		pl("  -l Node Logs S3 URI    : "+ logsS3Uri);
 		pl("  -d Local work dir      : "+ workDirectory);
 		pl("  -t Terminate node on exit    : "+ terminateInstance);
-		pl("  -w Min 2 wait before exit    : "+ minToWait);
+		pl("  -w Min to wait before exit   : "+ minToWait);
 		pl("  -x Replace S3 job with local : "+ (syncDirs==false));
 
+	}
+	
+	private void printHostInfo() {
 		pl("\nJob Runner Info:");
 		pl("  Host name              : "+ hostName);
 		pl("  Number processors      : "+ numberProcessors);
@@ -1003,7 +1062,9 @@ public class JobRunner {
 		
 		if (availabilityZone != null) {
 			pl("  Availability Zone      : "+ availabilityZone);
+			pl("  Region                 : "+ region);
 			pl("  Instance ID            : "+ instanceId);
+			pl("  Spot Request ID        : "+ spotId);
 			pl("  Instance Type          : "+ instanceType);
 			pl("  Terminate upon exit    : "+ terminateInstance);
 		}
@@ -1011,19 +1072,23 @@ public class JobRunner {
 
 	public static void printDocs(){
 		System.out.println("\n" +
-				"****************************************************************************************************************************\n" +
-				"**                                              AWS Job Runner : December 2021                                            **\n" +
-				"****************************************************************************************************************************\n" +
-				"JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed your resource bundle and looks for\n"+
-				"xxx.sh_JR_START files in your S3 Jobs directories. For each, it copies over the directory contents, executes the\n"+
-				"associated xxx.sh script, and transfers back the results.  This is repeated until no unrun jobs are found. Launch many\n"+
-				"EC2 JR nodes, each running an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and\n"+
-				"hibernation to reduce costs.\n"+
+				"**************************************************************************************\n" +
+				"**                              AWS Job Runner : January 2021                       **\n" +
+				"**************************************************************************************\n" +
+				"JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed\n"+
+				"your resource bundle and looks for xxx.sh_JR_START files in your S3 Jobs directories.\n"+
+				"For each, it copies over the directory contents, executes the associated xxx.sh\n"+
+				"script, and transfers back the results. This is repeated until no unrun jobs are\n"+
+				"found. Launch many EC2 JR nodes, each running an instance of the JR, to process\n"+
+				"hundreds of jobs in parallel. Use spot requests and hibernation to reduce costs.\n"+
+				"Upon termination, JR will cancel the spot request and kill the instance.\n"+
 				
 				"\nTo use:\n"+
-				"1) Install and configure the aws cli on your local workstation, see https://aws.amazon.com/cli/\n"+
-				"2) Upload your aws credentials file into a private bucket on aws, e.g.\n"+
-				"     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt\n"+
+				"1) Install and configure the aws cli on your local workstation, see\n"+
+				"     https://aws.amazon.com/cli/\n"+
+				"2) Upload a [default] aws credential file containing a single set of region,\n"+
+				"     aws_access_key_id, and aws_secret_access_key info into a private bucket, e.g.\n"+
+				"     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt \n"+
 				"3) Generate a secure 24hr timed URL for the credentials file, e.g.\n"+
 				"     aws --region us-west-2  s3 presign s3://my-jr/aws.cred.txt  --expires-in 259200\n"+
 				"4) Upload a zip archive containing resources needed to run your jobs into S3, e.g.\n"+
@@ -1031,12 +1096,15 @@ public class JobRunner {
 				"     This will be copied into the /JRDir/ directory and then unzipped.\n"+
 				"5) Upload script and job files into a 'Jobs' directory on S3, e.g.\n"+
 				"     aws s3 cp ~/JRJobs/A/ s3://my-jr/Jobs/A/ --recursive\n"+
-				"6) Optional, upload bash script files ending with JR_INIT.sh and or JR_TERM.sh. These are executed by JR before and after\n"+
-				"     running the main bash script.  Use these to copy in sample specific resources, e.g. fastq/ cram/ bam files, and to run\n"+
+				"6) Optional, upload bash script files ending with JR_INIT.sh and or JR_TERM.sh. These\n"+
+				"     are executed by JR before and after running the main bash script.  Use these to\n"+
+				"     copy in sample specific resources, e.g. fastq/ cram/ bam files, and to run\n"+
 				"     post job clean up.\n"+
-				"7) Upload a file named XXX_JR_START to let the JobRunner know the bash script named XXX is ready to run, e.g.\n"+
+				"7) Upload a file named XXX_JR_START to let the JobRunner know the bash script named\n"+
+				"     XXX is ready to run, e.g.\n"+
 				"     aws s3 cp s3://my-jr/emptyFile s3://my-jr/Jobs/A/dnaAlignQC.sh_JR_START\n"+
-				"8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See https://ri-confluence.hci.utah.edu/x/gYCgBw\n"+
+				"8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See\n"+
+				"     https://ri-confluence.hci.utah.edu/x/gYCgBw\n"+
 
 				"\nJob Runner Required Options:\n"+
 				"-c URL to your secure timed config credentials file.\n"+
@@ -1045,23 +1113,25 @@ public class JobRunner {
 				"-l S3URI to your Log folder for node logs.\n"+
 				
 				"\nDefault Options:\n"+
-				"-d Directory on the local worker node, full path, in which resources and job files will be processed, defaults to /JRDir/\n"+
+				"-d Directory on the local worker node, full path, in which resources and job files\n"+
+				"     will be processed, defaults to /JRDir/\n"+
 				"-a Aws credentials directory, defaults to ~/.aws/\n"+
-				"-t Terminate the EC2 node upon job completion. Defaults to looking for jobs for the min2Wait.\n"+
-				"-w Minutes to wait when jobs are not found before termination, defaults to 10.\n"+
-				"-x Replace S3 job directories with processed analysis, defaults to syncing local with S3. WARNING, if selected, don't place\n"+
-				"     any files in these S3 jobs directories that cannot be replaced. JR will delete them.\n"+
+				"-t Terminate the EC2 node upon program exit, defaults to leaving it running. \n"+
+				"-w Minutes to wait looking for jobs before exiting, defaults to 10.\n"+
+				"-x Replace S3 job directories with processed analysis, defaults to syncing local with\n"+
+				"     S3. WARNING, if selected, don't place any files in these S3 jobs directories that\n"+
+				"     cannot be replaced. JR will delete them.\n"+
 				"-v Verbose debugging output.\n"+
 
 				"\nExample: java -jar -Xmx1G JobRunner.jar -x -t \n"+
 				"     -r s3://my-jr/TNRunnerResourceBundle.zip\n"+
 				"     -j s3://my-jr/Jobs/\n"+
 				"     -l s3://my-jr/NodeLogs/\n"+
-				"     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMXXX...'\n\n"+
+				"     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-AmRun...'\n\n"+
 		
 				
 
-				"****************************************************************************************************************************\n");
+				"**************************************************************************************\n");
 
 	}
 
