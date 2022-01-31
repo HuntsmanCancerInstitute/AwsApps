@@ -77,21 +77,25 @@ Example: java -Xmx20G -jar pathTo/GSync_X.X.jar -r -u -k -b hcibioinfo_gsync_rep
 
 
 
-u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/JobRunner_0.2.jar 
+u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/JobRunner_0.3.jar 
 
-****************************************************************************************************************************
-**                                              AWS Job Runner : December 2021                                            **
-****************************************************************************************************************************
-JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed your resource bundle and looks for
-xxx.sh_JR_START files in your S3 Jobs directories. For each, it copies over the directory contents, executes the
-associated xxx.sh script, and transfers back the results.  This is repeated until no unrun jobs are found. Launch many
-EC2 JR nodes, each running an instance of the JR, to process hundreds of jobs in parallel. Use spot requests and
-hibernation to reduce costs.
+**************************************************************************************
+**                              AWS Job Runner : January 2021                       **
+**************************************************************************************
+JR is an app for running bash scripts on AWS EC2 nodes. It downloads and uncompressed
+your resource bundle and looks for xxx.sh_JR_START files in your S3 Jobs directories.
+For each, it copies over the directory contents, executes the associated xxx.sh
+script, and transfers back the results. This is repeated until no unrun jobs are
+found. Launch many EC2 JR nodes, each running an instance of the JR, to process
+hundreds of jobs in parallel. Use spot requests and hibernation to reduce costs.
+Upon termination, JR will cancel the spot request and kill the instance.
 
 To use:
-1) Install and configure the aws cli on your local workstation, see https://aws.amazon.com/cli/
-2) Upload your aws credentials file into a private bucket on aws, e.g.
-     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt
+1) Install and configure the aws cli on your local workstation, see
+     https://aws.amazon.com/cli/
+2) Upload a [default] aws credential file containing a single set of region,
+     aws_access_key_id, and aws_secret_access_key info into a private bucket, e.g.
+     aws s3 cp ~/.aws/credentials s3://my-jr/aws.cred.txt 
 3) Generate a secure 24hr timed URL for the credentials file, e.g.
      aws --region us-west-2  s3 presign s3://my-jr/aws.cred.txt  --expires-in 259200
 4) Upload a zip archive containing resources needed to run your jobs into S3, e.g.
@@ -99,35 +103,41 @@ To use:
      This will be copied into the /JRDir/ directory and then unzipped.
 5) Upload script and job files into a 'Jobs' directory on S3, e.g.
      aws s3 cp ~/JRJobs/A/ s3://my-jr/Jobs/A/ --recursive
-6) Optional, upload bash script files ending with JR_INIT.sh and or JR_TERM.sh. These are executed by JR before and after
-     running the main bash script.  Use these to copy in sample specific resources, e.g. fastq/ cram/ bam files, and to run
+6) Optional, upload bash script files ending with JR_INIT.sh and or JR_TERM.sh. These
+     are executed by JR before and after running the main bash script.  Use these to
+     copy in sample specific resources, e.g. fastq/ cram/ bam files, and to run
      post job clean up.
-7) Upload a file named XXX_JR_START to let the JobRunner know the bash script named XXX is ready to run, e.g.
+7) Upload a file named XXX_JR_START to let the JobRunner know the bash script named
+     XXX is ready to run, e.g.
      aws s3 cp s3://my-jr/emptyFile s3://my-jr/Jobs/A/dnaAlignQC.sh_JR_START
-8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See https://ri-confluence.hci.utah.edu/x/gYCgBw
+8) Launch the JobRunner.jar on one or more JR configured EC2 nodes. See
+     https://ri-confluence.hci.utah.edu/x/gYCgBw
 
-Job Runner Options:
+Job Runner Required Options:
 -c URL to your secure timed config credentials file.
 -r S3URI to your zipped resource bundle.
 -j S3URI to your root Jobs directory containing folders with job scripts to execute.
 -l S3URI to your Log folder for node logs.
 
 Default Options:
--d Directory on the local worker node, full path, in which resources and job files will be processed, defaults to /JRDir/
+-d Directory on the local worker node, full path, in which resources and job files
+     will be processed, defaults to /JRDir/
 -a Aws credentials directory, defaults to ~/.aws/
--t Terminate the EC2 node upon job completion. Defaults to looking for jobs for the min2Wait.
--w Minutes to wait when jobs are not found before termination, defaults to 10.
--x Replace S3 job directories with processed analysis, defaults to syncing local with S3. WARNING, if selected, don't place
-     any files in these S3 jobs directories that cannot be replaced. JR will delete them.
+-t Terminate the EC2 node upon program exit, defaults to leaving it running. 
+-w Minutes to wait looking for jobs before exiting, defaults to 10.
+-x Replace S3 job directories with processed analysis, defaults to syncing local with
+     S3. WARNING, if selected, don't place any files in these S3 jobs directories that
+     cannot be replaced. JR will delete them.
 -v Verbose debugging output.
 
-Example: java -jar -Xmx1G JobRunner.jar
+Example: java -jar -Xmx1G JobRunner.jar -x -t 
      -r s3://my-jr/TNRunnerResourceBundle.zip
      -j s3://my-jr/Jobs/
      -l s3://my-jr/NodeLogs/
-     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-Amz-Algorithm=AWS4-HMXXX...'
+     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-AmRun...'
 
-****************************************************************************************************************************
+**************************************************************************************
+
 
 
 
