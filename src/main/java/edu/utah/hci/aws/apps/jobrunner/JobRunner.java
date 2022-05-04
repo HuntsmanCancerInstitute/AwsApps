@@ -9,6 +9,9 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.mail.MessagingException;
+
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
@@ -75,11 +78,14 @@ public class JobRunner {
 	private String resourceS3Uri = null;
 	private String jobsS3Uri = null;
 	private String logsS3Uri = null;
+	private String stopS3Uri = null;
 	private String credentialsUrl = null;
 	private boolean verbose = false;
 	private boolean syncDirs = true;
 	private boolean terminateInstance = false;
 	private int minToWait = 10;
+	private String email = null;
+	private String smtpHost = null;
 	private boolean testing = false;
 
 	//internal fields
@@ -165,7 +171,9 @@ public class JobRunner {
 
 			//fetch next job
 			for (int i=0; i< minToWait; i++) {
-				workingJob = fetchJob();
+				//stop?
+				if (stopJobs()) workingJob = null;
+				else workingJob = fetchJob();
 				//not null, ready to go so break out of loop
 				if (workingJob != null) break;
 				// null and user want's to terminate immediately
@@ -175,7 +183,7 @@ public class JobRunner {
 				}
 				//just wait 1 min, then look again
 				else {
-					pl("\tNo jobs, waiting "+(minToWait-i)+"m...");
+					pl("\tNo jobs (or stopped), waiting "+(minToWait-i)+"m...");
 					Thread.currentThread().sleep(1000*60);
 				}
 			}
@@ -217,6 +225,28 @@ public class JobRunner {
 		}
 	}
 	
+	private void sendEmail(String subject, String body) {
+		if (email == null) return;
+		try {
+			Util.postMail(email, "JR "+hostName+" "+Util.getDateTime()+" "+subject, body, "noreply_JobRunner@hci.utah.edu", smtpHost);
+		} catch (MessagingException e) {
+			el("\nError sending email");
+			el(Util.getStackTrace(e));
+		}
+	}
+	
+	private boolean stopJobs() throws Exception {
+		if (stopS3Uri == null) return false;
+		if (verbose) pl("\tLooking for the stop jobs object "+stopS3Uri+" ...");
+		String[] cmd = {awsPath, "s3", "ls", stopS3Uri};
+		int exitCode = executeReturnExitCode(cmd, false, true, null);
+		if (exitCode == 0) {
+			pl("\tStop jobs object "+stopS3Uri+" found, haulting new job exection.");
+			return true;
+		}
+		return false;
+	}
+
 	private String fetchCost(double min) {
 		String dollars = "NA";
 		if (spotPrice !=0) {
@@ -365,25 +395,49 @@ public class JobRunner {
 	}
 	
 
-	/*writeNodeLogCode 0=noWrite, 1=error, 2=complete*/
+	/*writeNodeLogCode 0=ok, 1=error*/
 	private void shutDown(int ec) throws Exception {
 		exitCode = ec;
+		
+		if (email != null) {
+			if (ec == 1)  sendNodeErrorEmail("shutting down");
+			else sendEmail("Node OK, shutting down", "");
+		}
 		
 		//kill the spot request
 		if (spotId != null) {
 			if (verbose) pl ("Canceling spot request...");
 			String[] cmd = new String[]{awsPath, "--region", region, "ec2", "cancel-spot-instance-requests", "--spot-instance-request-ids", spotId};
-			executeReturnExitCode(cmd, false, true, null);
+			int code = 1;
+			try {
+				code = executeReturnExitCode(cmd, false, true, null);
+			} catch (Exception e) {
+				el(Util.getStackTrace(e));
+			}
+			if (code !=0) sendNodeErrorEmail("failed to cancel spot request! Log into AWS ASAP!");
 		}
 		
 		// this will system exit
 		if (availabilityZone != null && terminateInstance) {
 			if (verbose) pl ("Terminating instance...");
 			String[] cmd = new String[]{awsPath, "--region", region, "ec2", "terminate-instances", "--instance-ids", instanceId};
-			executeReturnExitCode(cmd, false, true, null);
+			int code = 1;
+			try {
+				code = executeReturnExitCode(cmd, false, true, null);
+			} catch (Exception e) {
+				el(Util.getStackTrace(e));
+			}
+			if (code !=0) sendNodeErrorEmail("failed to terminate instance! Log into AWS ASAP!");
 		}
 		Util.pl("\tComplete");
 		if (testing == false) System.exit(ec);
+	}
+	
+	private void sendNodeErrorEmail(String message) {
+		if (email == null) return;
+		String status = "Node ERROR, "+message;
+		String body = "See node error log "+ hostName+ nodeError+ date+ ".txt"+" in "+ logsS3Uri;
+		sendEmail(status, body);
 	}
 
 	private void writeInstantiationLog() throws Exception {
@@ -391,6 +445,7 @@ public class JobRunner {
 		wroteInstantiationLog = true;
 		
 		pl("\n"+hostName+" successfully instantiated...");
+		sendEmail("instantiated", "");
 		
 		File hostLogFile = new File (tmpDirectory, hostName+ nodeInstantiated +date+ ".txt");
 		Util.write(hostLog.toString(), hostLogFile);
@@ -470,8 +525,10 @@ public class JobRunner {
 		}
 		else {
 			workingJob.setCompletedOK(false);
-			if (verbose) pl("\n\tERROR job exit code, check "+workingJob.getJobLogFile().getName() +" in "+workingJob.getS3UrlRunningJobPath());
+			String em = "ERROR job exit code, check "+workingJob.getJobLogFile().getName() +" in "+workingJob.getS3UrlRunningJobPath();
+			if (verbose) pl("\n\t"+em);
 			message = "ERROR";
+			sendEmail("ERROR", em);
 		}
 		return message;
 	}
@@ -898,8 +955,11 @@ public class JobRunner {
 					case 'a': awsCredentialsDir = new File(args[++i]).getCanonicalFile(); break;
 					case 'r': resourceS3Uri = args[++i]; break;
 					case 'c': credentialsUrl = args[++i]; break;
+					case 's': stopS3Uri = args[++i]; break;
 					case 'j': jobsS3Uri = args[++i]; break;
 					case 'l': logsS3Uri = args[++i]; break;
+					case 'e': email = args[++i]; break;
+					case 'm': smtpHost = args[++i]; break;
 					case 't': terminateInstance = true; break;
 					case 'w': minToWait = Integer.parseInt(args[++i]); break;
 					case 'v': verbose = true; break;
@@ -937,7 +997,7 @@ public class JobRunner {
 		if (logsS3Uri.endsWith("/") == false) logsS3Uri = logsS3Uri+"/";
 
 		//check S3Uri
-		if (resourceS3Uri.startsWith("s3://") == false || jobsS3Uri.startsWith("s3://") == false) {
+		if (resourceS3Uri.startsWith("s3://") == false || jobsS3Uri.startsWith("s3://") == false || stopS3Uri.startsWith("s3://") == false) {
 			throw new IOException("Error: S3URIs must start with s3:// see Parameters above.");
 		}
 		if (resourceS3Uri.endsWith(".zip") == false) throw new IOException("Error: the zip resource S3Uri must end with xxx.zip, see "+resourceS3Uri);	
@@ -1044,8 +1104,11 @@ public class JobRunner {
 		pl("  -c Credentials URL     : "+ cred[0]);
 		pl("  -r Zip resource S3 URI : "+ resourceS3Uri);
 		pl("  -j Jobs S3 URI         : "+ jobsS3Uri);
+		pl("  -s Stop S3 URI         : "+ stopS3Uri);
 		pl("  -l Node Logs S3 URI    : "+ logsS3Uri);
 		pl("  -d Local work dir      : "+ workDirectory);
+		pl("  -e Email               : "+ email);
+		pl("  -m Smtp host           : "+ smtpHost);
 		pl("  -t Terminate node on exit    : "+ terminateInstance);
 		pl("  -w Min to wait before exit   : "+ minToWait);
 		pl("  -x Replace S3 job with local : "+ (syncDirs==false));
@@ -1117,16 +1180,21 @@ public class JobRunner {
 				"     will be processed, defaults to /JRDir/\n"+
 				"-a Aws credentials directory, defaults to ~/.aws/\n"+
 				"-t Terminate the EC2 node upon program exit, defaults to leaving it running. \n"+
+				"-s S3URI to an object that if present, stops JR from taking any new jobs.\n"+
 				"-w Minutes to wait looking for jobs before exiting, defaults to 10.\n"+
 				"-x Replace S3 job directories with processed analysis, defaults to syncing local with\n"+
 				"     S3. WARNING, if selected, don't place any files in these S3 jobs directories that\n"+
 				"     cannot be replaced. JR will delete them.\n"+
+				"-e Email address to send status messages, requires an smtp host and extensive account \n"+
+				"     configuration. All messages are written to the node and job logs.\n"+
+				"-m Smtp host to use in sending email messages, requires an email address.\n"+
 				"-v Verbose debugging output.\n"+
 
 				"\nExample: java -jar -Xmx1G JobRunner.jar -x -t \n"+
 				"     -r s3://my-jr/TNRunnerResourceBundle.zip\n"+
 				"     -j s3://my-jr/Jobs/\n"+
 				"     -l s3://my-jr/NodeLogs/\n"+
+				"     -s s3://my-jr/stop\n"+
 				"     -c 'https://my-jr.s3.us-west-2.amazonaws.com/aws.cred.txt?X-AmRun...'\n\n"+
 		
 				

@@ -101,7 +101,7 @@ public class VersionManager {
 		if (s3 != null) s3.close();
 	}
 
-	public void walkObjectVersions() {
+	public void walkObjectVersions() throws Exception {
 
 			ListObjectVersionsIterable versionList = s3.listObjectVersionsPaginator(ListObjectVersionsRequest.builder()
 					.maxKeys(1000)
