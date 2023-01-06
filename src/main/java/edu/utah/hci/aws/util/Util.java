@@ -75,6 +75,49 @@ public class Util {
 		return (double)secOld/86400.0;
 	}
 	
+	/**Trims characters common to all from start of lines.*/
+	public static String[] trimCommonStart(String[] lines){
+		//trim front
+		boolean go = true;
+		int clip = 0;
+		while (go){
+			//check length
+			if (lines[0].length() <= clip){
+				clip--;
+				break;
+			}
+			char test = lines[0].charAt(clip);
+			//for each line
+			for (int i=1; i< lines.length; i++){
+				//check if long enough
+				if (lines[i].length() <= clip) {
+					clip--;
+					go = false;
+					break;
+				}
+				
+				else if (test != lines[i].charAt(clip) ){
+					go = false;
+					break;
+				}
+			}
+			if (go) clip++;
+		}
+		String[] clipped = new String[lines.length];
+		for (int i=0; i< lines.length; i++){
+			clipped[i] = lines[i].substring(clip);
+		}
+		return clipped;
+	}
+
+	
+	/**Splits mybucket/path/to/file.txt to mybucket path/to/file.txt  MUST not start with s3://! */
+	public static String[] splitBucketKey(String uri) {
+		int i = uri.indexOf('/');
+		if (i == -1) return new String[] {uri, ""};
+		return new String[] {uri.substring(0, i), uri.substring(i+1)};
+	}
+	
 	/**Parses a file containing key = value lines into a HashMap.
 	 * Empty, #, [ lines are ignored. Subsequent duplicate keys are not extracted only the first occurrence.*/
 	public static HashMap<String, String> parseKeyValues (File f) throws IOException{
@@ -105,6 +148,28 @@ public class Util {
 		String region = a.get("region");
 		if (region == null) throw new IOException("Failed to find a 'region' key in ~/.aws/credentials file");
 		return region;
+	}
+	
+	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null if nothing found.*/
+	public static String getRegionFromCredentials(String profile) throws IOException {
+		String path = System.getProperty("user.home")+"/.aws/credentials";
+		File cred = new File (path);
+		if (cred.exists() == false) throw new IOException("Failed to find your ~/.aws/credentials file?");
+		String[] lines = Util.loadTxtFile(cred);
+		String lookFor = "["+profile+"]";
+		for (int i=0; i<lines.length; i++) {
+			if (lines[i].equals(lookFor)) {
+				for (int j=i+1; j< lines.length; j++) {
+					if (lines[j].startsWith("[")) break;
+					else if (lines[j].startsWith("region")) {
+						String[] tokens = Util.EQUALS.split(lines[j]);
+						if (tokens.length !=2) throw new IOException("Failed to split your region key in two, "+lines[j]); 
+						return tokens[1];
+					}
+				}
+			}
+		}
+		return null;
 	}
 	
 	/**Converts milliseconds to days.*/
@@ -255,6 +320,7 @@ public class Util {
 	}
 	
 	
+	
 	/**Executes a String of shell script commands via a temp file.  Only good for Unix.
 	 * @throws IOException */
 	public static String[] executeShellScript (String shellScript, File tempDirectory) throws IOException{
@@ -267,6 +333,22 @@ public class Util {
 		//execute
 		String[] cmd = new String[]{"bash", shellFile.getCanonicalPath()};
 		String[] res = executeViaProcessBuilder(cmd, false, null);
+		shellFile.delete();
+		return res; 
+	}
+	
+	/**Executes a String of shell script commands via a temp file.  Only good for Unix. Returns the exit code. Prints errors if encountered.
+	 * @throws IOException */
+	public static int executeShellScriptReturnExitCode (String shellScript, File tempDirectory) throws Exception{
+		//make shell file
+		File shellFile = new File (tempDirectory, new Double(Math.random()).toString().substring(2)+"_TempFile.sh");
+		shellFile.deleteOnExit();
+		//write to shell file
+		write(new String[] {shellScript}, shellFile);
+		shellFile.setExecutable(true);
+		//execute
+		String[] cmd = new String[]{"bash", shellFile.getCanonicalPath()};
+		int res = executeReturnExitCode (cmd, false, true, null);
 		shellFile.delete();
 		return res; 
 	}
@@ -463,5 +545,23 @@ public class Util {
 		return files;
 	}
 
+	public static String arrayListToString(@SuppressWarnings("rawtypes") ArrayList al, String delimiter) {
+		int size = al.size();
+		if (size == 0) return "";
+		else if (size == 1) return al.get(0).toString();
+		StringBuilder sb = new StringBuilder(al.get(0).toString());
+		for (int i=1; i< size; i++) {
+			sb.append(delimiter);
+			sb.append(al.get(i));
+		}
+		return sb.toString();
+	}
+	
+	/*From https://stackoverflow.com/questions/3758606/how-can-i-convert-byte-size-into-a-human-readable-format-in-java*/
+	public static String formatSize(long v) {
+	    if (v < 1024) return v + " B";
+	    int z = (63 - Long.numberOfLeadingZeros(v)) / 10;
+	    return String.format("%.1f %sB", (double)v / (1L << (z*10)), " KMGTPE".charAt(z));
+	}
 
 }
