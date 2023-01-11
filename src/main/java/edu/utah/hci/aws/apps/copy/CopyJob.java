@@ -3,8 +3,6 @@ package edu.utah.hci.aws.apps.copy;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-
-import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
@@ -32,10 +30,21 @@ public class CopyJob {
 		String size = "\t"+Util.formatSize(source.getSize());
 		
 		//does the destination already exist and matches size?
-		if (destinationFile != null && destinationFile.exists()) {
-			if (destinationFile.length() == source.getSize()) complete = true;
-			
+		//destination file
+		if (destinationFile != null) {
+			if (destinationFile.exists()) {
+				if (destinationFile.length() == source.getSize()) complete = true;
+				else {
+					s3Copy.pl("\tDestination exists but different size, will overwrite"+size);
+					return;
+				}
+			}
+			else {
+				s3Copy.pl("\tDownload to local"+size);
+				return;
+			}
 		}
+		//destination s3 object
 		else {
 			ArrayList<S3ObjectSummary> destObj = s3Copy.fetchS3Objects(destinationBucket, destinationKey, true);
 			if (destObj.size()==1) {
@@ -68,36 +77,41 @@ public class CopyJob {
 	public String restoreCopy(CopyJobWorker cjw) throws Exception {
 		if (complete) return "Complete";
 
-		//does it need to be restored?
+		//does it need to be restored? archived?
 		if (source.getStorageClass().equals("STANDARD") == false) {
 			//pull meta data
 			ObjectMetadata metaData = s3Copy.tryGetObjectMetadata(source.getBucketName(),  source.getKey());
 			
-			//ready to be copied?
-			if (metaData.getArchiveStatus()==null && metaData.getOngoingRestore()==false) return copyIt(cjw);
-			
-			//needs a restore?
-			if (metaData.getOngoingRestore()==false) {
+			//restore placed?
+			Boolean or = metaData.getOngoingRestore();
+			if (or != null) {
+				//yes, is it ready for copying
+				if (or==false) return copyIt(cjw);
+				//nope, must wait
+				return "Restoring"; 
+			}
+			//null so place a restore request
+			else {
 				cjw.restore(source.getBucketName(), source.getKey());
 				return "Restore request placed";
 			}
-			return "Restoring";
-			
 		}
-		//copy it
-		return copyIt(cjw);
+		//not archived so copy it
+		else return copyIt(cjw);
 		
 	}
 
 	private String copyIt(CopyJobWorker cjw) throws Exception {
+		//destination is s3?
 		if (destinationFile == null) {
 			cjw.s3Copy(source.getBucketName(), source.getKey(), destinationBucket, destinationKey);
 			complete = true;
 			return "Copied";
 		}
-		
-		s3Copy.el("Copy from s3 to local not implemented just yet!");
-		return "Local copy not supported";
+		//destination is local
+		cjw.tryDownload(source.getBucketName(), source.getKey(), destinationFile);
+		complete = true;
+		return "Downloaded";
 		
 		
 	}

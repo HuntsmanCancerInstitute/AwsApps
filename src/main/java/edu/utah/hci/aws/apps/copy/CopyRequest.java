@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import edu.utah.hci.aws.util.Util;
 
-/** This holds information related to the copy request the user has made.  Each copy request can actually contain one or more individual copy jobs*/
+/** This holds information related to a single line copy request the user has made.  Each copy request can actually contain one or more individual copy jobs*/
 public class CopyRequest {
 	
 	private String inputCopyJob = null;
@@ -28,7 +28,7 @@ public class CopyRequest {
 	private ArrayList<CopyJob> copyJobs = new ArrayList<CopyJob>();
 	
 	
-	public CopyRequest (String line, S3Copy s3Copy) {
+	public CopyRequest (String line, S3Copy s3Copy) throws IOException {
 		this.s3Copy = s3Copy;
 		inputCopyJob = line.trim();
 		
@@ -44,9 +44,10 @@ public class CopyRequest {
 			
 			//check destination
 			if (destinationUri.startsWith("s3://")) destinationBucketKey = Util.splitBucketKey(destinationUri.substring(5));
+			
 			else {
-				//must be a file
-				destinationFile = new File(destinationUri);
+				//must be a file or directory
+				destinationFile = Util.fetchFullPath(destinationUri);
 				//directory? if needed make it.
 				if (destinationUri.endsWith("/")) {
 					if (destinationFile.exists()== false) {
@@ -97,12 +98,20 @@ public class CopyRequest {
 	public void makeSimpleS3CopyJob(S3ObjectSummary sourceObject) throws Exception {
 		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationBucketKey[1], null, s3Copy));
 	}
+	
+	public void makeSimpleLocalCopyJob(S3ObjectSummary sourceObject) throws Exception {
+		copyJobs.add(new CopyJob(sourceObject, null, null, destinationFile, s3Copy));
+	}
 
 	private void makeS3CopyJob(S3ObjectSummary sourceObject,String trimmedOriginKey) throws Exception {
 		String destinationKey = null;
 		if (destinationBucketKey[1].length()==0) destinationKey = trimmedOriginKey;
 		else destinationKey = destinationBucketKey[1] + trimmedOriginKey;
 		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationKey, null, s3Copy));
+	}
+	
+	private void makeLocalCopyJob(S3ObjectSummary sourceObject,String trimmedOriginKey) throws Exception {
+		copyJobs.add(new CopyJob(sourceObject, null, null, new File(destinationFile, trimmedOriginKey), s3Copy));
 	}
 	
 
@@ -176,7 +185,31 @@ public class CopyRequest {
 			}
 		}
 		else {
-			errorMessage.add("\tERROR, s3 copy to local not implemented.");
+			
+			 //1) Object to file s3://bucket/folder/object.txt > /local/folder/subfolder/object2.txt
+			 //2) Recursive both ending s3://bucket/folder/ > /local/folder/subfolder/
+			 //3) Recursive with prefix s3://bucket/folder/obj > /local/folder/subfolder/
+
+			boolean destinationIsDirectory = destinationFile.isDirectory();
+			
+			//is it a simple object to local file copy?
+			if (destinationIsDirectory == false) {
+				if (sourceObjects.size()==1) makeSimpleLocalCopyJob(sourceObjects.get(0));
+				else {
+					errorMessage.add("\tERROR, more than one s3 objects found but the local destination is not a directory (add a trailing '/' to the copy request?)");
+					for (S3ObjectSummary o: sourceObjects) errorMessage.add("\t\t"+o.getKey());
+				}
+			}
+
+			//OK it's a recursive copy to either the bucket root or a subfolder, trim the source prefixes
+			else {
+				String[] trimmedSourceKeys = new String[sourceObjects.size()];
+				int lastSlashIndex = sourceBucketKey[1].lastIndexOf("/");
+				if (lastSlashIndex == -1) lastSlashIndex = 0;
+				else lastSlashIndex++;
+				for (int i=0; i< trimmedSourceKeys.length; i++) trimmedSourceKeys[i] = sourceObjects.get(i).getKey().substring(lastSlashIndex);
+				for (int i=0; i< trimmedSourceKeys.length; i++) makeLocalCopyJob(sourceObjects.get(i), trimmedSourceKeys[i]);
+			}
 		}
 	}
 }

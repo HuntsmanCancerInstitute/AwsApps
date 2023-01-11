@@ -26,18 +26,15 @@ import java.util.Properties;
 import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import javax.mail.Message;
 import javax.mail.MessagingException;
 import javax.mail.Transport;
 import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeMessage;
-
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.Transfer.TransferState;
-
 import com.amazonaws.services.s3.transfer.TransferProgress;
 
 /**Static utility methods.*/
@@ -351,6 +348,36 @@ public class Util {
 		int res = executeReturnExitCode (cmd, false, true, null);
 		shellFile.delete();
 		return res; 
+	}
+	
+	/**Fetches the full path from file paths that use . and ~ , may or may not actually exist.*/
+	public static File fetchFullPath (String partialFilePath) throws IOException {
+		File toReturn = null;
+		
+		// starts with .
+		if (partialFilePath.startsWith(".")) {
+			String workingDirWithSlash = System.getProperty("user.dir")+"/"; //  /Users/u0028003/Code/AwsApps/
+			// ./ or .
+			if (partialFilePath.equals(".") || partialFilePath.equals("./")) toReturn = new File(workingDirWithSlash);
+			// ./Larry.txt
+			else if (partialFilePath.startsWith("./")) toReturn = new File(workingDirWithSlash+ partialFilePath.substring(2));
+			else throw new IOException("ERROR parsing full file path for -> "+partialFilePath);
+		}
+		
+		// starts with ~
+		else if (partialFilePath.startsWith("~")) {
+			String homeDirWithSlash = System.getProperty("user.home")+"/"; //  /Users/u0028003/
+			// ~/ or ~
+			if (partialFilePath.equals("~") || partialFilePath.equals("~/")) toReturn = new File(homeDirWithSlash);
+			// ~/Larry.txt
+			else if (partialFilePath.startsWith("~/")) toReturn = new File(homeDirWithSlash+ partialFilePath.substring(2));
+			else throw new IOException("ERROR parsing full file path for -> "+partialFilePath);
+		}
+		
+		//either full path / or something else
+		else toReturn = new File(partialFilePath);
+		
+		return toReturn.getCanonicalFile();
 	}
 	
 	/**Loads a file's lines into a String[], won't save blank lines.*/

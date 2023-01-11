@@ -2,36 +2,21 @@ package edu.utah.hci.aws.apps.copy;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import javax.mail.MessagingException;
 import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.iterable.S3Objects;
 import com.amazonaws.services.s3.model.ObjectMetadata;
-import com.amazonaws.services.s3.model.RestoreObjectRequest;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
-import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
-import com.amazonaws.services.s3.transfer.Copy;
-import com.amazonaws.services.s3.transfer.Download;
-import com.amazonaws.services.s3.transfer.Transfer;
-import com.amazonaws.services.s3.transfer.TransferManager;
-import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
-import com.amazonaws.services.s3.transfer.Upload;
 
 /**
  * Copies archived and non archived S3 objects to new S3 URIs.  Can run as a daemon checking every hour to look for restored files it can then copy over. Recursive or single files.
@@ -40,6 +25,7 @@ import com.amazonaws.services.s3.transfer.Upload;
  * 		2) Recursive both ending s3://bucket/folder/ > s3://bucket2/folder/subfolder/
  *      3) Recursive with prefix s3://bucket/folder/obj > s3://bucket2/folder/subfolder/
  *      	Both recursive destinations MUST end with /
+ *      4) Ditto for local downloads, does interp . ./ ~/
  * 
  * 	2) Create this file ~/.aws/credentials with your access, secret, and region info, chmod 600 the file and keep it safe.
 	 	[default]
@@ -122,9 +108,7 @@ public class S3Copy {
 		}
 	}
 
-	public S3Copy() {
-		// TODO Auto-generated constructor stub
-	}
+	public S3Copy() {}
 
 	private boolean makeCopyJobs() throws Exception {
 		pl("\nMaking individual CopyJobs, checking status...");
@@ -170,8 +154,11 @@ public class S3Copy {
 		
 			//check CopyJobs, this resets the counters, might all be done if no restores were required
 			checkCopyJobs();
-			pl(numCopyJobsToCopy+" File(s) to copy ("+Util.formatSize(sizeToCopy)+"), "+numCopyJobsComplete+" File(s) copied/exist ("+Util.formatSize(sizeComplete)+")");
-			if (numCopyJobsToCopy == 0) return;
+			if (numCopyJobsToCopy != 0) pl(numCopyJobsToCopy+" File(s) to copy ("+Util.formatSize(sizeToCopy)+"), "+numCopyJobsComplete+" File(s) copied/exist ("+Util.formatSize(sizeComplete)+")");
+			else {
+				pl("\n"+numCopyJobsComplete+" File(s) successfully copied ("+Util.formatSize(sizeComplete)+")");
+				return; 
+			}
 			
 			pl("Waiting "+numMinToSleep+" min");
 			Thread.sleep(1000*60*numMinToSleep);
@@ -227,25 +214,6 @@ public class S3Copy {
 		throw new IOException("ERROR failed to fetch ObjectMedaData for "+key+" in "+bucketName+" S3 error message:\n"+error);
 	}
 
-	/**Attempts 's3.doesObjectExist(bucketName, key)' maxTries before throwing error message*/
-	private boolean tryDoesObjectExist(String bucketName, String key) throws IOException {		
-		int attempt = 0;
-		String error = null;
-		while (attempt++ < maxTries) {
-			try {
-				return s3.doesObjectExist(bucketName, key);
-			} catch (AmazonServiceException ase) {
-				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 's3.doesObjectExist(bucketName, key)' trying again, "+attempt);
-			}
-			catch (SdkClientException sce) {
-				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 's3.doesObjectExist(bucketName, key)' trying again, "+attempt);
-			};
-		}
-		//only hits this if all the attempts failed
-		throw new IOException("ERROR looking for "+key+" in "+bucketName+" S3 error message:\n"+error);
-	}
 
 	private void sleep(String message) {
 		try {
@@ -256,13 +224,7 @@ public class S3Copy {
 		}
 	}
 
-	/**Attempts 'tm.copy(bucketName, sourceObjectKey, bucketName, destObjectKey)' maxTries before throwing error message*/
-
 	//for diff region copying see https://stackoverflow.com/questions/59980898/how-to-copy-files-from-s3-bucket-from-one-region-to-another-region-using-aws-jav
-
-
-
-
 
 
 	void sendEmail() {
@@ -282,8 +244,10 @@ public class S3Copy {
 			Util.write(message, tmp);
 			
 			//execute via a shell script
-			String cmd = "set -e; sendmail '"+email+"' < "+tmp.getCanonicalPath();
+			String cmd = "sendmail '"+email+"' < "+tmp.getCanonicalPath();
 			int exit = Util.executeShellScriptReturnExitCode(cmd, tmpDir);
+			
+			Util.pl("Sending email: "+cmd);
 			
 			if (exit != 0) throw new IOException ("\nERROR sending email with "+cmd);
 		} catch (Exception e) {
@@ -361,6 +325,7 @@ public class S3Copy {
 						case 'e': email = args[++i]; break;
 						case 'd': numberDaysToRestore = Integer.parseInt(args[++i]); break;
 						case 'r': dryRun = false; break;
+						case 'x': rerunUntilComplete = true; break;
 						case 't': maxThreads = Integer.parseInt(args[++i]); break;
 						case 'p': profile = args[++i]; break;
 						case 'h': printDocs(); System.exit(0);
@@ -392,7 +357,7 @@ public class S3Copy {
 		}
 	}	
 
-	private boolean parseUserCopyRequests() {
+	private boolean parseUserCopyRequests() throws IOException {
 		pl("\nParsing CopyRequests...");
 		String[] lines = null;
 
@@ -418,49 +383,53 @@ public class S3Copy {
 
 	private void printOptions() {
 		pl("Options:");
-		pl("  -c Copy job input            : "+ jobString);
-		pl("  -r Dry run                   : "+ dryRun);
-		pl("  -e Email                     : "+ email);
-		pl("  -x Rerun till complete       : "+ rerunUntilComplete);
-		pl("  -t Max number threads        : "+ maxThreads);
-		pl("  -p Credentials profile       : "+ profile);
+		pl("  -c Copy job input                : "+ jobString);
+		pl("  -r Dry run                       : "+ dryRun);
+		pl("  -e Email                         : "+ email);
+		pl("  -x Rerun untill complete         : "+ rerunUntilComplete);
+		pl("  -d # days to keep restored files : "+ numberDaysToRestore);
+		pl("  -t Max number threads            : "+ maxThreads);
+		pl("  -p Credentials profile           : "+ profile);
 	}
 
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                  Archive Copy : Jan 2023                         **\n" +
+				"**                                   S3 Copy : Jan 2023                             **\n" +
 				"**************************************************************************************\n" +
-				"AC copies AWS S3 objects between buckets or to local, unarchiving files as\n"+
-				"needed. Run as a daemon with -x or run repeatedly until complete.\n"+
+				"SC copies AWS S3 objects between buckets or downloads them to local unarchiving files\n"+
+				"as needed. Run this as a daemon with -x or run repeatedly until complete. To upload \n"+
+				"files, use the AWS CLI. \n"+
 
 				"\nTo use the app:\n"+ 
-
-				"3) Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
-				"   600 the file and keep it private. Use a txt editor or the aws cli configure\n"+
-				"   command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:\n"+
-				"   [default]\n"+
-				"   aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A\n"+
-				"   aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
-				"   region = us-west-2\n"+
-
+				"Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
+				"  600 the file and keep it private. Use a txt editor or the AWS CLI configure\n"+
+				"  command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:\n"+
+				"      [default]\n"+
+				"      aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A\n"+
+				"      aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
+				"      region = us-west-2\n"+
 
 				"\nRequired:\n"+
 				"-c Provide a comma delimited string of copy jobs or a txt file with one per line.\n"+
-				"      A copy job consists of a full S3 URI as the source and destination delimited"+
-				"      by '>', e.g. 's3://source/tumor.cram > s3://destination/collabTumor.cram' or"+
-				"      folders 's3://source/alignments/ > s3://destination/CollabAlignments/'. Note,"+
-				"      the trailing '/' is required in the destination for a recursive copy.\n"+
+				"      A copy job consists of a full S3 URI as the source and a destination separated\n"+
+				"      by '>', e.g. 's3://source/tumor.cram > s3://destination/collabTumor.cram' or\n"+
+				"      folders 's3://source/alignments/tumor > s3://destination/Collab/' or local\n"+
+				"      's3://source/alignments/tumor > .' Note, the trailing '/' is required in the\n"+
+				"      S3 destination for a recursive copy or when the local folder doesn't exist.\n"+
 
 				"\nOptional/ Defaults:\n" +
 				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
 				"-e Email addresse(s) to send status messages, comma delimited, no spaces. Note, \n"+
-				"      sendmail must be configured on your system.\n"+
-				"-x Execute every 1 hr until complete\n"+
-				"-t Maximum threads to run, defaults to 8\n"+
+				"      the sendmail app must be configured on your system. Try\n"+
+				"      'echo 'Subject: Hello' | sendmail yourEmailAddress@gmail.com'\n"+
+				"-x Execute every hour until complete. Standard unarchiving takes ~12hrs.\n"+
+				"-t Maximum threads to utilize, defaults to 8\n"+
 				"-p AWS credentials profile, defaults to 'default'\n"+
+				"-d Number of days to keep restored files in S3, defaults to 1\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/ArchiveCopy -e obama@real.gov\n\n"+
+				"\nExample: java -Xmx20G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -x -t 10\n"+
+				"   -c 's3://source/Logs.zip > s3://destination/,s3://source/normal > ~/Downloads/' -r\n"+ 
 
 				"**************************************************************************************\n");
 

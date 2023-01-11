@@ -1,14 +1,15 @@
 package edu.utah.hci.aws.apps.copy;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
-
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.RestoreObjectRequest;
 import com.amazonaws.services.s3.transfer.Copy;
+import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import edu.utah.hci.aws.util.Util;
@@ -97,6 +98,33 @@ public class CopyJobWorker implements Runnable {
 		//only hits this if all the attempts failed
 		throw new IOException("ERROR failed tm.copy("+sourceBucket+", "+sourceKey+", "+destBucket+", "+destKey+") S3 error message:\n"+error);
 	}
+	
+	/**Attempts 'tm.download(bucketName, key)' maxTries before throwing error message*/
+	public void tryDownload(String bucketName, String key, File destination) throws Exception {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				Download xfer = tm.download(bucketName, key, destination);
+				xfer.waitForCompletion();
+				return;
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			}
+			catch ( InterruptedException ie) {
+				error = Util.getStackTrace(ie);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed tm.download("+bucketName+", "+key+") S3 error message:\n"+error);
+	}
+
 
 	private void sleep(String message) {
 		try {
