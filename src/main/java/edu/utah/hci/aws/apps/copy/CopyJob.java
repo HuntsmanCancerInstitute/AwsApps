@@ -16,17 +16,19 @@ public class CopyJob {
 	private String destinationKey;
 	private File destinationFile;
 	private S3Copy s3Copy;
+	private CopyRequest copyRequest;
 	private boolean complete = false;
 	private boolean error = false;
 	
-	public CopyJob (S3ObjectSummary source, String destinationBucket, String destinationKey, File destinationFile, S3Copy s3Copy) throws Exception {
+	public CopyJob (S3ObjectSummary source, String destinationBucket, String destinationKey, File destinationFile, S3Copy s3Copy, CopyRequest copyRequest) throws Exception {
 		this.source = source;
 		this.destinationBucket = destinationBucket;
 		this.destinationKey = destinationKey;
 		this.destinationFile = destinationFile;
 		this.s3Copy = s3Copy;
+		this.copyRequest = copyRequest;
 		
-		s3Copy.p("\t"+toString());
+		s3Copy.p("\t"+source.getStorageClass()+ "\t"+ toString());
 		String size = "\t"+Util.formatSize(source.getSize());
 		
 		//does the destination already exist and matches size?
@@ -44,10 +46,18 @@ public class CopyJob {
 				return;
 			}
 		}
-		//destination s3 object
+		//destination s3 object, must use appropriate region
 		else {
-			ArrayList<S3ObjectSummary> destObj = s3Copy.fetchS3Objects(destinationBucket, destinationKey, true);
-			if (destObj.size()==1) {
+			ArrayList<S3ObjectSummary> destObj = s3Copy.fetchS3Objects(destinationBucket, destinationKey, copyRequest.getDestinationRegion(),  true);
+			
+			//returned null?
+			if (destObj == null) {
+				s3Copy.pl("\tERROR, access denied. Aborting.");
+				error = true;
+				return;
+			}
+			
+			else if (destObj.size()==1) {
 				if (destObj.get(0).getSize() == source.getSize()) complete = true;
 				else {
 					s3Copy.pl("\tDestination exists but different size, will overwrite"+size);
@@ -71,6 +81,7 @@ public class CopyJob {
 				error = true;
 			}
 		else dest = "s3://"+destinationBucket+"/"+destinationKey;
+		
 		return "s3://"+source.getBucketName()+"/"+source.getKey()+" -> "+dest;
 	}
 	
@@ -80,7 +91,7 @@ public class CopyJob {
 		//does it need to be restored? archived?
 		if (source.getStorageClass().equals("STANDARD") == false) {
 			//pull meta data
-			ObjectMetadata metaData = s3Copy.tryGetObjectMetadata(source.getBucketName(),  source.getKey());
+			ObjectMetadata metaData = cjw.tryGetObjectMetadata(source.getBucketName(),  source.getKey(), copyRequest.getSourceRegion());
 			
 			//restore placed?
 			Boolean or = metaData.getOngoingRestore();
@@ -92,7 +103,7 @@ public class CopyJob {
 			}
 			//null so place a restore request
 			else {
-				cjw.restore(source.getBucketName(), source.getKey());
+				cjw.restore(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), s3Copy.getRestoreTier());
 				return "Restore request placed";
 			}
 		}
@@ -104,12 +115,12 @@ public class CopyJob {
 	private String copyIt(CopyJobWorker cjw) throws Exception {
 		//destination is s3?
 		if (destinationFile == null) {
-			cjw.s3Copy(source.getBucketName(), source.getKey(), destinationBucket, destinationKey);
+			cjw.s3S3Copy(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), destinationBucket, destinationKey, copyRequest.getDestinationRegion());
 			complete = true;
 			return "Copied";
 		}
 		//destination is local
-		cjw.tryDownload(source.getBucketName(), source.getKey(), destinationFile);
+		cjw.tryDownload(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), destinationFile);
 		complete = true;
 		return "Downloaded";
 		

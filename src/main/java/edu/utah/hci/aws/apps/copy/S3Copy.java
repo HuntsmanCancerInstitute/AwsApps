@@ -3,6 +3,8 @@ package edu.utah.hci.aws.apps.copy;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -12,8 +14,12 @@ import edu.utah.hci.aws.util.Util;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.iterable.S3Objects;
+import com.amazonaws.services.s3.model.AmazonS3Exception;
+import com.amazonaws.services.s3.model.HeadBucketRequest;
+import com.amazonaws.services.s3.model.HeadBucketResult;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.amazonaws.services.s3.model.Tier;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
@@ -32,6 +38,8 @@ import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 		aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A
 		aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
 		region = us-west-2
+		
+	Currently not supported is copying between accounts, see https://github.com/aws/aws-sdk-java/issues/2431 to start, permissions headache!
  */
 public class S3Copy {
 
@@ -39,9 +47,11 @@ public class S3Copy {
 	private String jobString = null;
 	private String profile = "default";
 	private int numberDaysToRestore = 1;
-	private boolean dryRun = true;
+	private boolean dryRun = false;
 	private String email = null;
 	private int maxThreads = 8;
+	private boolean recursiveCopy = false;
+	private Tier restoreTier = Tier.Standard;
 
 	//for looping till complete
 	private boolean rerunUntilComplete = false;
@@ -56,7 +66,7 @@ public class S3Copy {
 	private int maxTries = 5;
 	private int minToWait = 5;
 	private boolean printStackTrace = true;
-	private AmazonS3 s3 = null;
+	private HashMap<String, AmazonS3> s3 = new HashMap<String, AmazonS3>();
 	private long numCopyJobsComplete = 0;
 	private long numCopyJobsToCopy = 0;
 	private long sizeComplete = 0;
@@ -64,6 +74,7 @@ public class S3Copy {
 	private ArrayList<CopyJob> copyJobsToProc = new ArrayList<CopyJob>();
 	private int indexCopyJobsToProc = -1;
 	private ProfileCredentialsProvider credentials;
+	private File tmpEmailLog = null;
 
 	public S3Copy (String[] args){
 		try {
@@ -76,10 +87,15 @@ public class S3Copy {
 				printStackTrace = false;
 				throw new Exception("\nFix errors and restart.");
 			}
+			
+			//check access and fetch the region for each bucket
+			if (checkAccessFetchRegions() == false) {
+				printStackTrace = false;
+				throw new Exception("\nFix permission? errors and restart.");
+			}
 
-			//Make the individual copy jobs, check status, and look for errors
 			//TODO: Should thread this
-			s3 = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(region).build();
+			//Make the individual copy jobs, check status, and look for errors
 			if (makeCopyJobs() == false) {
 				printStackTrace = false;
 				throw new Exception("\nFix errors and restart.");
@@ -93,19 +109,70 @@ public class S3Copy {
 			//anything to copy?
 			else if (numCopyJobsToCopy != 0) doWork();
 
-			if (s3 != null) s3.shutdown();
+			shutdown();
 			double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
 			pl("\nDone! "+Math.round(diffTime)+" minutes\n");
 			sendEmail();
 			
 		} catch (Exception e) {
 			resultsCheckOK = false;
-			if (s3 != null) s3.shutdown();
+			shutdown();
 			el(e.getMessage());
 			if (printStackTrace) el(Util.getStackTrace(e));
 			sendEmail();
 			System.exit(1);
 		}
+	}
+	
+	private boolean checkAccessFetchRegions() throws Exception {
+		pl("\nFetching bucket regions...");
+
+		HashMap<String, String> bucketNameRegion = fetchBucketRegions();
+		if (bucketNameRegion == null) return false;
+		
+		//add em to each CopyRequest
+		for (CopyRequest cr: copyRequests) {
+			String sourceBucketName = cr.getSourceBucketKey()[0];
+			cr.setSourceRegion(bucketNameRegion.get(sourceBucketName));
+			//any s3 destination?
+			if (cr.getDestinationBucketKey()!=null) {
+				String destinationBucketName = cr.getDestinationBucketKey()[0];
+				cr.setDestinationRegion(bucketNameRegion.get(destinationBucketName));
+			}
+		}
+		return true;
+		
+	}
+
+	private HashMap<String, String> fetchBucketRegions() {
+		
+		//pull all the bucket names
+		HashSet<String> bucketNames = new HashSet<String>();
+		for (CopyRequest cr: copyRequests) {
+			bucketNames.add(cr.getSourceBucketKey()[0]);
+			if (cr.getDestinationBucketKey()!=null) bucketNames.add(cr.getDestinationBucketKey()[0]);
+		}
+		
+		//for each one
+		HashMap<String, String> bucketNameRegion = new HashMap<String, String>();
+		AmazonS3 userS3 = fetchS3Client(region);
+		ArrayList<String> errorMessages = new ArrayList<String>();
+		for (String bn: bucketNames) {
+			try {
+				String bucketRegion = Util.fetchBucketRegion(userS3, bn);
+				 bucketNameRegion.put(bn, bucketRegion);
+				//if (regionAccess[1].equals("OK")) bucketNameRegion.put(bn, regionAccess[0]);
+				//else errorMessages.add("Cannot access bucket: "+bn);
+			} catch (Exception e) {
+				errorMessages.add(e.getMessage());
+			}
+		}
+		//any errors?
+		if (errorMessages.size()!=0) {
+			el("\t"+Util.arrayListToString(errorMessages, "\n\t"));
+			return null;
+		}
+		return bucketNameRegion;
 	}
 
 	public S3Copy() {}
@@ -119,12 +186,26 @@ public class S3Copy {
 			pl(cr.toString());
 			cr.makeCopyJobs();
 			//any errors?
-			if (cr.getErrorMessage().size()!=0) {
+			if (cr.getErrorMessage().size()!=0 || cr.isCopyJobError()==true) {
 				ok = false;
 				for (String e: cr.getErrorMessage()) el(e);
 			}
 		}
 		return ok;
+	}
+	
+	/**Close down the AmazonS3 clients and any associated TransferManagers.*/
+	private void shutdown() {
+		for (AmazonS3 s : s3.values()) s.shutdown();
+	}
+	
+	private AmazonS3 fetchS3Client(String region) {
+		AmazonS3 s3Client = s3.get(region);
+		if (s3Client == null) {
+			s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(region).build();
+			s3.put(region, s3Client);
+		}
+		return s3Client;
 	}
 	
 
@@ -195,12 +276,12 @@ public class S3Copy {
 	}
 
 	/**Attempts 's3.getObjectMetadata(bucketName, key)' maxTries before throwing error message*/
-	ObjectMetadata tryGetObjectMetadata(String bucketName, String key) throws IOException {		
+	ObjectMetadata tryGetObjectMetadata(String bucketName, String key, String region) throws IOException {		
 		int attempt = 0;
 		String error = null;
 		while (attempt++ < maxTries) {
 			try {
-				return s3.getObjectMetadata(bucketName, key);
+				return fetchS3Client(region).getObjectMetadata(bucketName, key);
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
 				sleep("\tWARNING: failed 's3.getObjectMetadata(bucketName, key)' trying again, "+attempt);
@@ -231,7 +312,6 @@ public class S3Copy {
 		if (email == null) return;
 		try {
 			//sendmail 'david.austin.nix@gmail.com,david.nix@hci.utah.edu' < sm.txt
-			
 			//write out the message
 			String status = " - COMPLETE - ";
 			if (resultsCheckOK == false) status = " - ERROR - ";
@@ -239,16 +319,15 @@ public class S3Copy {
 			String message = "Subject: S3Copy" +status+ Util.getDateTime()+"\nFrom: noreply_s3copy@hci.utah.edu\n"+log.toString();
 			File tmpDir = new File(System.getProperty("java.io.tmpdir"));
 			if (tmpDir.exists()==false) throw new Exception("ERROR: failed to find tmp dir. "+tmpDir);
-			File tmp = new File(tmpDir, "S3Copy.tmp.txt");
-			tmp.deleteOnExit();
-			Util.write(message, tmp);
+			tmpEmailLog = new File(tmpDir, "S3Copy.tmp.txt");
+			tmpEmailLog.deleteOnExit();
+			Util.write(message, tmpEmailLog);
 			
 			//execute via a shell script
-			String cmd = "sendmail '"+email+"' < "+tmp.getCanonicalPath();
+			String cmd = "sendmail '"+email+"' < "+tmpEmailLog.getCanonicalPath();
 			int exit = Util.executeShellScriptReturnExitCode(cmd, tmpDir);
-			
 			Util.pl("Sending email: "+cmd);
-			
+			//this never happens?
 			if (exit != 0) throw new IOException ("\nERROR sending email with "+cmd);
 		} catch (Exception e) {
 			el("\nError sending email");
@@ -256,9 +335,6 @@ public class S3Copy {
 			System.exit(1);
 		}
 	}
-
-
-
 
 	public synchronized void pl(String s) {
 		System.out.println(s);
@@ -274,31 +350,37 @@ public class S3Copy {
 		log.append(s);
 	}
 
-
-	public ArrayList<S3ObjectSummary> fetchS3Objects(String bucketName, String prefix, boolean exactKeyMatch) throws IOException {
+	public ArrayList<S3ObjectSummary> fetchS3Objects(String bucketName, String prefix, String region, boolean exactKeyMatch) throws IOException {
 		ArrayList<S3ObjectSummary> toReturn = new ArrayList<S3ObjectSummary>();
-		//Util.pl("Bucket: "+bucketName+"\tKey: "+prefix+"\tExact: "+exactKeyMatch);
-		//whole bucket?
-		if (prefix == null || prefix.length()==0) {
-			S3Objects.inBucket(s3, bucketName).forEach((S3ObjectSummary os) -> {
-				toReturn.add(os);
-			});
-		}
 
-		//with prefix
-		else {
-			S3Objects.withPrefix(s3, bucketName, prefix).forEach((S3ObjectSummary os) -> {
-				if (exactKeyMatch) {
-					if (os.getKey().equals(prefix)) toReturn.add(os);
-				}
-				else toReturn.add(os);
-			});
+		try {
+			//whole bucket?
+			if (prefix == null || prefix.length()==0) {
+				S3Objects.inBucket(fetchS3Client(region), bucketName).forEach((S3ObjectSummary os) -> {
+					toReturn.add(os);
+				});
+			}
+
+			//with prefix
+			else {
+				S3Objects.withPrefix(fetchS3Client(region), bucketName, prefix).forEach((S3ObjectSummary os) -> {
+					if (exactKeyMatch) {
+						if (os.getKey().equals(prefix)) toReturn.add(os);
+					}
+					else toReturn.add(os);
+				});
+			}
+		} catch (AmazonS3Exception ae) {
+			//access denied?
+			if (ae.getStatusCode() == 403) return null;
+			else throw new IOException (ae.getErrorMessage());
 		}
 
 		return toReturn;
 	}
+	
 
-
+	
 
 	public static void main(String[] args) {
 		if (args.length ==0){
@@ -312,7 +394,7 @@ public class S3Copy {
 	public void processArgs(String[] args) {
 		try {
 			Pattern pat = Pattern.compile("-[a-z]");
-			pl("ArchiveCopy Arguments: "+Util.stringArrayToString(args, " ")+"\n");
+			pl("S3Copy Arguments: "+Util.stringArrayToString(args, " ")+"\n");
 
 			for (int i = 0; i<args.length; i++){
 				String lcArg = args[i].toLowerCase();
@@ -321,14 +403,17 @@ public class S3Copy {
 					char test = args[i].charAt(1);
 					try{
 						switch (test){
-						case 'c': jobString = args[++i]; break;
+						case 'j': jobString = args[++i]; break;
 						case 'e': email = args[++i]; break;
-						case 'd': numberDaysToRestore = Integer.parseInt(args[++i]); break;
-						case 'r': dryRun = false; break;
-						case 'x': rerunUntilComplete = true; break;
+						case 'n': numberDaysToRestore = Integer.parseInt(args[++i]); break;
+						case 'd': dryRun = true; break;
+						case 'r': recursiveCopy = true; break;
+						case 'x': restoreTier = Tier.Expedited; numMinToSleep = 1; break;
+						case 'l': rerunUntilComplete = true; break;
 						case 't': maxThreads = Integer.parseInt(args[++i]); break;
 						case 'p': profile = args[++i]; break;
 						case 'h': printDocs(); System.exit(0);
+						case 'a': printDiffAccountInstructions(); 
 						default: Util.printExit("\nProblem, unknown option! " + mat.group());
 						}
 					}
@@ -346,8 +431,8 @@ public class S3Copy {
 
 			if (jobString == null) Util.printErrAndExit("\nERROR: please provide a file path or string with copy job information, see the help menu.\n");
 
-			region = Util.getRegionFromCredentials(profile);
-			if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile and or region in ~/.aws.credentials, "+profile);
+			region = Util.getRegionFromCredentials(profile);		
+			if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile and or region in ~/.aws/credentials, "+profile);
 			credentials = new ProfileCredentialsProvider(profile);
 
 		} catch (Exception e) {
@@ -383,13 +468,64 @@ public class S3Copy {
 
 	private void printOptions() {
 		pl("Options:");
-		pl("  -c Copy job input                : "+ jobString);
-		pl("  -r Dry run                       : "+ dryRun);
+		pl("  -j Copy job input                : "+ jobString);
+		pl("  -d Dry run                       : "+ dryRun);
 		pl("  -e Email                         : "+ email);
-		pl("  -x Rerun untill complete         : "+ rerunUntilComplete);
-		pl("  -d # days to keep restored files : "+ numberDaysToRestore);
+		pl("  -l Rerun until complete          : "+ rerunUntilComplete);
+		pl("  -r Recursive copy                : "+ recursiveCopy);
+		pl("  -x Archive restore tier          : "+ restoreTier.toString());
+		pl("  -n # days to keep restored files : "+ numberDaysToRestore);
 		pl("  -t Max number threads            : "+ maxThreads);
 		pl("  -p Credentials profile           : "+ profile);
+	}
+	
+	public static void printDiffAccountInstructions() {
+		String inst = 
+				"To copy files between accounts:\n"+
+				"\n"+
+				"1) Fetch the source user account ARN, e.g. 'arn:aws:iam::xxx:user/xxxx' \n"+
+				"	Log into the source account in the AWS Console\n"+
+				"	Search for 'IAM' in the search bar at the top of the AWS Console landing page\n"+
+				"	Navigate to the IAM page, select 'Users', select the user name that has access to the source bucket and files\n"+
+				"	Copy and save the \"User ARN\" by clicking the copy symbol to the right of the ARN under the 'Summary' section\n"+
+				"	\n"+
+				"2) In the destination account, create a new temporary staging bucket in the preferred region. \n"+
+				"	Log into the destination account in the AWS Console\n"+
+				"	Search for 'S3' in the search bar at the top of the AWS Console landing page\n"+
+				"	Navigate to the S3 page, select 'Buckets'\n"+
+				"	Select the big orange 'Create bucket'\n"+
+				"	Enter a name like 'temp-s3transfer-delete-me'\n"+
+				"	Select the region where your primary data files are kept\n"+
+				"	Create the bucket and save its name\n"+
+				"\n"+
+				"3) Use a txt editor to copy paste in the json policy below, replace the source 'arn:aws:iam::xxx:user/xxxx' and destination bucket name 'temp-s3transfer-delete-me' with your info. Be careful that tabs are not introduced while modifying. This policy will allow the named user full S3 access to the bucket and the files within.\n"+
+				"{\n"+
+				"    \"Version\": \"2012-10-17\",\n"+
+				"    \"Statement\": [\n"+
+				"        {\n"+
+				"            \"Sid\": \"S3CopyAllS3Access\",\n"+
+				"            \"Effect\": \"Allow\",\n"+
+				"            \"Principal\": {\n"+
+				"                \"AWS\": [\n"+
+				"                    \"arn:aws:iam::xxx:user/xxxx\"\n"+
+				"                ]\n"+
+				"            },\n"+
+				"            \"Action\": \"s3:*\",\n"+
+				"            \"Resource\": [\n"+
+				"                \"arn:aws:s3:::temp-s3transfer-delete-me\",\n"+
+				"                \"arn:aws:s3:::temp-s3transfer-delete-me/*\"\n"+
+				"            ]\n"+
+				"        }\n"+
+				"    ]\n"+
+				"}\n"+
+				"\n"+
+				"4) Add this policy to the temporary staging bucket to enable access to the source user.\n"+
+				"	Log into the destination account in the AWS Console, navigate to the S3 page, select 'Buckets', then select the temporary bucket.\n"+
+				"	Under the 'Permissions' tab, edit the 'Bucket policy' replacing it with the above.\n"+
+				"\n"+
+				"5) Run S3Copy to copy your files into the destination temporary bucket.  Then have the destination owner move the files into a permanent bucket. Lastly, delete the temporary bucket.\n";
+		Util.pl(inst);
+		System.exit(0);
 	}
 
 	public void printDocs(){
@@ -397,9 +533,9 @@ public class S3Copy {
 				"**************************************************************************************\n" +
 				"**                                   S3 Copy : Jan 2023                             **\n" +
 				"**************************************************************************************\n" +
-				"SC copies AWS S3 objects between buckets or downloads them to local unarchiving files\n"+
-				"as needed. Run this as a daemon with -x or run repeatedly until complete. To upload \n"+
-				"files, use the AWS CLI. \n"+
+				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
+				"accounts or downloads them to your local computer. Run this as a daemon with -x or run\n"+
+				"repeatedly until complete. To upload files to S3, use the AWS CLI. \n"+
 
 				"\nTo use the app:\n"+ 
 				"Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
@@ -409,9 +545,11 @@ public class S3Copy {
 				"      aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A\n"+
 				"      aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
 				"      region = us-west-2\n"+
+				"Repeat these entries for multiple accounts replacing the word 'default' with a single\n"+
+				"unique account name.\n"+
 
 				"\nRequired:\n"+
-				"-c Provide a comma delimited string of copy jobs or a txt file with one per line.\n"+
+				"-j Provide a comma delimited string of copy jobs or a txt file with one per line.\n"+
 				"      A copy job consists of a full S3 URI as the source and a destination separated\n"+
 				"      by '>', e.g. 's3://source/tumor.cram > s3://destination/collabTumor.cram' or\n"+
 				"      folders 's3://source/alignments/tumor > s3://destination/Collab/' or local\n"+
@@ -419,17 +557,21 @@ public class S3Copy {
 				"      S3 destination for a recursive copy or when the local folder doesn't exist.\n"+
 
 				"\nOptional/ Defaults:\n" +
-				"-r Perform a real run, defaults to just listing the actions that would be taken\n"+
+				"-d Perform a dry run to list the actions that would be taken\n"+
+				"-r Perform a recursive copy, defaults to an exact source key match\n"+
 				"-e Email addresse(s) to send status messages, comma delimited, no spaces. Note, \n"+
-				"      the sendmail app must be configured on your system. Try\n"+
-				"      'echo 'Subject: Hello' | sendmail yourEmailAddress@gmail.com'\n"+
-				"-x Execute every hour until complete. Standard unarchiving takes ~12hrs.\n"+
+				"      the sendmail app must be configured on your system. Test it:\n"+
+				"      echo 'Subject: Hello' | sendmail yourEmailAddress@yourProvider.com\n"+
+				"-x Expedite archive retrieval, increased cost $0.03/GB vs $0.01/GB, 1-5min vs 3-12hr, \n"+
+				"      defaults to standard.\n"+
+				"-l Execute every hour (standard) or minute (expedited) until complete\n"+
 				"-t Maximum threads to utilize, defaults to 8\n"+
 				"-p AWS credentials profile, defaults to 'default'\n"+
-				"-d Number of days to keep restored files in S3, defaults to 1\n"+
+				"-n Number of days to keep restored files in S3, defaults to 1\n"+
+				"-a Print instructions for copying files between different accounts\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -x -t 10\n"+
-				"   -c 's3://source/Logs.zip > s3://destination/,s3://source/normal > ~/Downloads/' -r\n"+ 
+				"\nExample: java -Xmx20G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l\n"+
+				"   -j 's3://source/Logs.zip>s3://destination/,s3://source/normal > ~/Downloads/' -r\n"+ 
 
 				"**************************************************************************************\n");
 
@@ -465,6 +607,18 @@ public class S3Copy {
 
 	public String getProfile() {
 		return profile;
+	}
+
+	public boolean isRecursiveCopy() {
+		return recursiveCopy;
+	}
+
+	public File getTmpEmailLog() {
+		return tmpEmailLog;
+	}
+
+	public Tier getRestoreTier() {
+		return restoreTier;
 	}
 
 

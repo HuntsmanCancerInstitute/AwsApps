@@ -2,12 +2,17 @@ package edu.utah.hci.aws.apps.copy;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.CopyObjectRequest;
+import com.amazonaws.services.s3.model.GlacierJobParameters;
+import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.RestoreObjectRequest;
+import com.amazonaws.services.s3.model.Tier;
 import com.amazonaws.services.s3.transfer.Copy;
 import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
@@ -21,11 +26,11 @@ public class CopyJobWorker implements Runnable {
 	private boolean failed = false;
 	private S3Copy s3Copy = null;
 	private String name = null;
-	private AmazonS3 s3 = null;
 	private int maxTries;
 	private int numberDaysToRestore;
 	private int minToWait;
-	private TransferManager tm;
+	private HashMap<String, AmazonS3> s3 = new HashMap<String, AmazonS3>();
+	private HashMap<String, TransferManager> tm = new HashMap<String, TransferManager>();
 	
 	//constructor
 	public CopyJobWorker (S3Copy s3Copy, String name) {
@@ -34,10 +39,7 @@ public class CopyJobWorker implements Runnable {
 		this.maxTries = s3Copy.getMaxTries();
 		this.numberDaysToRestore = s3Copy.getNumberDaysToRestore();
 		this.minToWait = s3Copy.getMinToWait();
-		s3 = AmazonS3ClientBuilder.standard().withCredentials(s3Copy.getCredentials()).withRegion(s3Copy.getRegion()).build();
-		tm = TransferManagerBuilder.standard().withS3Client(s3).withMultipartCopyThreshold((long) (256 * 1024 * 1024)).build();
 	}
-	
 	
 	
 	//the thread runner
@@ -47,78 +49,125 @@ public class CopyJobWorker implements Runnable {
 			while ((cj = s3Copy.fetchNextCopyJob())!= null) {
 				Util.pl(cj+"\t"+ cj.restoreCopy(this));
 			}
-			s3.shutdown();
+			shutdown();
 			
 		} catch (Exception e) {
 			failed = true;
-			s3.shutdown();
-			e.printStackTrace();
+			shutdown();
+			s3Copy.el(Util.getStackTrace(e));
 		}
 	}
 	
-	/**Attempts 'ts3.restoreObjectV2()' maxTries before throwing error message*/
-	public void restore(String bucketName, String key) throws IOException {	
+	/**Close down the AmazonS3 clients and any associated TransferManagers.*/
+	private void shutdown() {
+		for (AmazonS3 s : s3.values()) s.shutdown();
+	}
+
+	/**Attempts 's3.getObjectMetadata(bucketName, key)' maxTries before throwing error message*/
+	ObjectMetadata tryGetObjectMetadata(String bucketName, String key, String region) throws IOException {		
 		int attempt = 0;
 		String error = null;
 		while (attempt++ < maxTries) {
 			try {
-				RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, numberDaysToRestore);
-				s3.restoreObjectV2(requestRestore);
+				return fetchS3Client(region).getObjectMetadata(bucketName, key);
+			} catch (AmazonServiceException ase) {
+				error = Util.getStackTrace(ase);
+				sleep("\tWARNING: failed 's3.getObjectMetadata(bucketName, key)' trying again, "+attempt);
+			}
+			catch (SdkClientException sce) {
+				error = Util.getStackTrace(sce);
+				sleep("\tWARNING: failed 's3.getObjectMetadata(bucketName, key)' trying again, "+attempt);
+			};
+		}
+		//only hits this if all the attempts failed
+		throw new IOException("ERROR failed to fetch ObjectMedaData for "+key+" in "+bucketName+" S3 error message:\n"+error);
+	}
+	
+	private AmazonS3 fetchS3Client(String region) {
+		AmazonS3 s3Client = s3.get(region);
+		if (s3Client == null) {
+			s3Client = AmazonS3ClientBuilder.standard().withCredentials(s3Copy.getCredentials()).withRegion(region).build();
+			s3.put(region, s3Client);
+		}
+		return s3Client;
+	}
+	
+	private TransferManager fetchTransferManager(String destinationRegion) {
+		TransferManager t = tm.get(destinationRegion);
+		if (t == null) {
+			AmazonS3 s3Dest = fetchS3Client(destinationRegion);
+			t = TransferManagerBuilder.standard().withS3Client(s3Dest).withMultipartCopyThreshold((long) (256 * 1024 * 1024)).build();
+			tm.put(destinationRegion, t);
+		}
+		return t;
+	}
+
+
+	/**Attempts 'ts3.restoreObjectV2()' maxTries before throwing error message*/
+	public void restore(String bucketName, String key, String region, Tier tier) throws IOException {	
+		int attempt = 0;
+		String error = null;
+		while (attempt++ < maxTries) {
+			try {
+				GlacierJobParameters gjp = new GlacierJobParameters().withTier(tier);
+				RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, numberDaysToRestore).withGlacierJobParameters(gjp);
+				fetchS3Client(region).restoreObjectV2(requestRestore);
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed restoreRequest trying again, "+attempt);
+				sleep("\tWARNING: failed restoreRequest trying again, "+attempt+"\n"+error);
 			}
 		}
 		//only hits this if all the attempts failed
 		throw new IOException("ERROR failed send a s3.restoreObjectV2 ("+bucketName+", "+key+") S3 error message:\n"+error);
 	}
 	
-	public void s3Copy(String sourceBucket, String sourceKey, String destBucket, String destKey) throws IOException {	
+	public void s3S3Copy(String sourceBucket, String sourceKey, String sourceRegion, String destBucket, String destKey, String destRegion) throws IOException {	
 		int attempt = 0;
 		String error = null;
 		while (attempt++ < maxTries) {
 			try {
-				Copy archiveCopy = tm.copy(sourceBucket, sourceKey, destBucket, destKey);
+				Copy archiveCopy = this.fetchTransferManager(destRegion).copy(new CopyObjectRequest(sourceBucket, sourceKey, destBucket, destKey), fetchS3Client(sourceRegion), null);
 				archiveCopy.waitForCompletion();
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
 			}
 			catch ( InterruptedException ie) {
 				error = Util.getStackTrace(ie);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
 			}
 			catch (SdkClientException sce) {
 				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
 			};
 		}
 		//only hits this if all the attempts failed
-		throw new IOException("ERROR failed tm.copy("+sourceBucket+", "+sourceKey+", "+destBucket+", "+destKey+") S3 error message:\n"+error);
+			
+		throw new IOException("ERROR failed tm.copy("+sourceBucket+", "+sourceKey+", "+destBucket+", "+destKey+", "+destRegion+") S3 error message:\n"+error);
 	}
 	
 	/**Attempts 'tm.download(bucketName, key)' maxTries before throwing error message*/
-	public void tryDownload(String bucketName, String key, File destination) throws Exception {	
+	public void tryDownload(String bucketName, String key, String region, File destination) throws Exception {	
 		int attempt = 0;
 		String error = null;
 		while (attempt++ < maxTries) {
 			try {
-				Download xfer = tm.download(bucketName, key, destination);
+				Download xfer = fetchTransferManager(region).download(bucketName, key, destination);
 				xfer.waitForCompletion();
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
 			}
 			catch ( InterruptedException ie) {
 				error = Util.getStackTrace(ie);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
 			}
 			catch (SdkClientException sce) {
 				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
 			};
 		}
 		//only hits this if all the attempts failed
@@ -139,8 +188,6 @@ public class CopyJobWorker implements Runnable {
 	public boolean isFailed() {
 		return failed;
 	}
-
-
 
 	public String getName() {
 		return name;

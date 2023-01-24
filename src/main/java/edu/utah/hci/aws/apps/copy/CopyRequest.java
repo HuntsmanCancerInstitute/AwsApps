@@ -3,6 +3,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.regex.Pattern;
+
+import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import edu.utah.hci.aws.util.Util;
 
@@ -11,17 +13,21 @@ public class CopyRequest {
 	
 	private String inputCopyJob = null;
 	private S3Copy s3Copy = null;
+	private boolean exactKeyMatch = false;
 	
 	//must be a s3:// uri
 	private String sourceUri  = null;
 	private String[] sourceBucketKey = null;
+	private String sourceRegion = null;
 	
 	//could be a s3:// uri or a local path
 	private String destinationUri = null;
 	private String[] destinationBucketKey = null;
+	private String destinationRegion = null;
 	private File destinationFile = null;
 
 	private ArrayList<String> errorMessage = new ArrayList<String>();
+	private boolean copyJobError = false;
 	private static final Pattern splitter = Pattern.compile("\\s*>\\s*");
 	private boolean complete = false;
 	
@@ -30,6 +36,7 @@ public class CopyRequest {
 	
 	public CopyRequest (String line, S3Copy s3Copy) throws IOException {
 		this.s3Copy = s3Copy;
+		exactKeyMatch = s3Copy.isRecursiveCopy() == false;
 		inputCopyJob = line.trim();
 		
 		//split into two parts, the source and the destination, keep in mind that they might be doing a recursive copy of the entire bucket or a folder within
@@ -96,22 +103,23 @@ public class CopyRequest {
 	}
 	
 	public void makeSimpleS3CopyJob(S3ObjectSummary sourceObject) throws Exception {
-		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationBucketKey[1], null, s3Copy));
+		//S3ObjectSummary source, String destinationBucket, String destinationKey, File destinationFile, S3Copy s3Copy, CopyRequest copyRequest
+		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationBucketKey[1], null, s3Copy, this));
 	}
 	
 	public void makeSimpleLocalCopyJob(S3ObjectSummary sourceObject) throws Exception {
-		copyJobs.add(new CopyJob(sourceObject, null, null, destinationFile, s3Copy));
+		copyJobs.add(new CopyJob(sourceObject, null, null, destinationFile, s3Copy, this));
 	}
 
 	private void makeS3CopyJob(S3ObjectSummary sourceObject,String trimmedOriginKey) throws Exception {
 		String destinationKey = null;
 		if (destinationBucketKey[1].length()==0) destinationKey = trimmedOriginKey;
 		else destinationKey = destinationBucketKey[1] + trimmedOriginKey;
-		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationKey, null, s3Copy));
+		copyJobs.add(new CopyJob(sourceObject, destinationBucketKey[0], destinationKey, null, s3Copy, this));
 	}
 	
 	private void makeLocalCopyJob(S3ObjectSummary sourceObject,String trimmedOriginKey) throws Exception {
-		copyJobs.add(new CopyJob(sourceObject, null, null, new File(destinationFile, trimmedOriginKey), s3Copy));
+		copyJobs.add(new CopyJob(sourceObject, null, null, new File(destinationFile, trimmedOriginKey), s3Copy, this));
 	}
 	
 
@@ -150,11 +158,16 @@ public class CopyRequest {
 	public void makeCopyJobs() throws Exception {
 		
 		//fetch all source objects
-		ArrayList<S3ObjectSummary> sourceObjects = s3Copy.fetchS3Objects(sourceBucketKey[0], sourceBucketKey[1], false);
+		ArrayList<S3ObjectSummary> sourceObjects = s3Copy.fetchS3Objects(sourceBucketKey[0], sourceBucketKey[1], sourceRegion, exactKeyMatch);
 
+		//returned null?
+		if (sourceObjects == null) {
+			errorMessage.add("\tERROR, access denied. Aborting.");
+		}
+		
 		//any objects found?
-		if (sourceObjects.size() == 0) {
-			errorMessage.add("\tERROR, no source s3 objects? Aborting.");
+		else if (sourceObjects.size() == 0) {
+			errorMessage.add("\tERROR, no source s3 objects? Set -r for recursive prefix matching? Aborting.");
 		}
 		
 		//s3 to s3 copy?
@@ -211,5 +224,33 @@ public class CopyRequest {
 				for (int i=0; i< trimmedSourceKeys.length; i++) makeLocalCopyJob(sourceObjects.get(i), trimmedSourceKeys[i]);
 			}
 		}
+		
+		//check the copy jobs for errors
+		for (CopyJob c: copyJobs) {
+			if (c.isError()) {
+				copyJobError=true;
+				return;
+			}
+		}
+	}
+
+	public String getSourceRegion() {
+		return sourceRegion;
+	}
+
+	public String getDestinationRegion() {
+		return destinationRegion;
+	}
+
+	public void setSourceRegion(String sourceRegion) {
+		this.sourceRegion = sourceRegion;
+	}
+
+	public void setDestinationRegion(String destinationRegion) {
+		this.destinationRegion = destinationRegion;
+	}
+
+	public boolean isCopyJobError() {
+		return copyJobError;
 	}
 }

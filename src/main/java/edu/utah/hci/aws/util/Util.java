@@ -33,6 +33,9 @@ import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeMessage;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.model.HeadBucketRequest;
+import com.amazonaws.services.s3.model.HeadBucketResult;
 import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.Transfer.TransferState;
 import com.amazonaws.services.s3.transfer.TransferProgress;
@@ -167,6 +170,31 @@ public class Util {
 			}
 		}
 		return null;
+	}
+	
+	public static final Pattern REGION_MESSAGE = Pattern.compile(".+region: ([\\w-]+)\\..+");
+	
+	/**Will fetch the region for any bucket.
+	 * @return bucket region
+	 * @throws IOException if the bucket doesn't exist.*/
+	public static String fetchBucketRegion(AmazonS3 sourceS3, String bucketName) throws IOException{
+		String region = null;
+		try {
+			//use a head request to attempt to find the region for the given bucket, this typically fails
+			HeadBucketRequest request = new HeadBucketRequest(bucketName);
+			HeadBucketResult  res = sourceS3.headBucket(request);
+			region = res.getBucketRegion();
+		} catch (Exception e) {
+			//attempt to parse the actual bucket region from the error message, ugg!
+			//'The bucket is in this region: us-east-2. Please use this region...'
+			String message = e.getMessage();
+			if (message.contains("bucket is in this region:")) {
+				Matcher mat = REGION_MESSAGE.matcher(message);
+				if (mat.matches()) region = mat.group(1);
+			}
+			else throw new IOException("FAILED to fetch the region for bucket "+bucketName+", does it exist? Error message: "+message);
+		}
+		return region;
 	}
 	
 	/**Converts milliseconds to days.*/
@@ -388,7 +416,7 @@ public class Util {
 			String line;
 			while ((line = in.readLine())!=null){
 				line = line.trim();
-				a.add(line);
+				if (line.length()!=0) a.add(line);
 			}
 			in.close();
 		}catch(Exception e){
