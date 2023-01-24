@@ -180,4 +180,53 @@ Example: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test
      -s .cram,.bam,.gz,.zip -a 7 -c MiloLab -l us-west-2
 
 **************************************************************************************
+
+
+
+u0028003$ java -jar ~/Code/AwsApps/target/S3Copy_0.1.jar 
+
+**************************************************************************************
+**                                   S3 Copy : Jan 2023                             **
+**************************************************************************************
+SC copies AWS S3 objects, unarchiving them as needed, within the same or different
+accounts or downloads them to your local computer. Run this as a daemon with -l or run
+repeatedly until complete. To upload files to S3, use the AWS CLI. 
+
+To use the app:
+Create a ~/.aws/credentials file with your access, secret, and region info, chmod
+  600 the file and keep it private. Use a txt editor or the AWS CLI configure
+  command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:
+      [default]
+      aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A
+      aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
+      region = us-west-2
+Repeat these entries for multiple accounts replacing the word 'default' with a single
+unique account name.
+
+Required:
+-j Provide a comma delimited string of copy jobs or a txt file with one per line.
+      A copy job consists of a full S3 URI as the source and a destination separated
+      by '>', e.g. 's3://source/tumor.cram > s3://destination/collabTumor.cram' or
+      folders 's3://source/alignments/tumor > s3://destination/Collab/' or local
+      's3://source/alignments/tumor > .' Note, the trailing '/' is required in the
+      S3 destination for a recursive copy or when the local folder doesn't exist.
+
+Optional/ Defaults:
+-d Perform a dry run to list the actions that would be taken
+-r Perform a recursive copy, defaults to an exact source key match
+-e Email addresse(s) to send status messages, comma delimited, no spaces. Note, 
+      the sendmail app must be configured on your system. Test it:
+      echo 'Subject: Hello' | sendmail yourEmailAddress@yourProvider.com
+-x Expedite archive retrieval, increased cost $0.03/GB vs $0.01/GB, 1-5min vs 3-12hr, 
+      defaults to standard.
+-l Execute every hour (standard) or minute (expedited) until complete
+-t Maximum threads to utilize, defaults to 8
+-p AWS credentials profile, defaults to 'default'
+-n Number of days to keep restored files in S3, defaults to 1
+-a Print instructions for copying files between different accounts
+
+Example: java -Xmx20G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l
+   -j 's3://source/Logs.zip>s3://destination/,s3://source/normal > ~/Downloads/' -r
+**************************************************************************************
+
 </pre>
