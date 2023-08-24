@@ -6,7 +6,7 @@ import edu.utah.hci.aws.util.Util;
 import software.amazon.awssdk.services.s3.model.DeleteMarkerEntry;
 import software.amazon.awssdk.services.s3.model.ObjectVersion;
 
-public class AwsKey {
+public class AwsKeyJobWorker {
 	
 	ArrayList<ObjectVersion> objects = null;
 	ArrayList<DeleteMarkerEntry> markers = null;
@@ -22,7 +22,7 @@ public class AwsKey {
 		markers.add(ov);
 	}
 
-	public void trimObjects(int minDaysOld, VersionManager vm, String key) {
+	public void trimObjects(int minDaysOld, VersionWorker vm, String key) throws Exception {
 		int num = 0;
 		if (objects != null) num = objects.size();
 		
@@ -31,7 +31,7 @@ public class AwsKey {
 			ObjectVersion ov = objects.get(0);
 			//isLatest true then delete any markers and leave the ov alone
 			if (ov.isLatest()) {
-				if (vm.isVerbose()) Util.pl(AwsKey.objectToString(ov, "KEEP_IsLatest"));
+				if (vm.isVerbose()) Util.pl(AwsKeyJobWorker.objectToString(ov, "KEEP_IsLatest"));
 				vm.deleteMarkers(markers, "DELETE_NoVersions");
 				return;
 			}
@@ -40,7 +40,7 @@ public class AwsKey {
 			double age = Util.daysOld(ov.lastModified());			
 			if (age < minDaysOld) {
 				if (vm.isVerbose()) {
-					Util.pl(AwsKey.objectToString(ov, "KEEP_Young"));
+					Util.pl(AwsKeyJobWorker.objectToString(ov, "KEEP_Young"));
 					writeMarkers("KEEP_VersionsPresent");
 				}
 				return;
@@ -55,7 +55,7 @@ public class AwsKey {
 		else if (num > 1) {
 			//pull latest out of AL
 			ObjectVersion latest = extractLatest();
-			if (latest != null && vm.isVerbose()) Util.pl(AwsKey.objectToString(latest, "KEEP_IsLatest"));
+			if (latest != null && vm.isVerbose()) Util.pl(AwsKeyJobWorker.objectToString(latest, "KEEP_IsLatest"));
 			
 			//walk remainder, these are all deleted objects or copied over objects
 			int numRem = objects.size();
@@ -67,7 +67,7 @@ public class AwsKey {
 					vm.deleteObject(ov, "DELETE_Expired");
 					numDel++;
 				}
-				else if (vm.isVerbose()) Util.pl(AwsKey.objectToString(ov, "KEEP_Young"));
+				else if (vm.isVerbose()) Util.pl(AwsKeyJobWorker.objectToString(ov, "KEEP_Young"));
 			}
 			//is the num deleted == num hidden? if so delete all of the markers
 			if (numDel == numRem) vm.deleteMarkers(markers, "DELETE_NoVersions");
@@ -84,15 +84,12 @@ public class AwsKey {
 	}
 
 	private ObjectVersion extractLatest() {
-
 		int num = objects.size();
 		for (int i=0; i<num; i++) {
 			ObjectVersion ov = objects.get(i);
 			if (ov.isLatest()) return objects.remove(i);
 		}
 		return null;
-		
-		
 	}
 
 

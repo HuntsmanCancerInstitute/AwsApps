@@ -2,18 +2,16 @@ package edu.utah.hci.aws.apps.versions;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import edu.utah.hci.aws.util.Util;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteMarkerEntry;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectVersionsRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectVersionsResponse;
-import software.amazon.awssdk.services.s3.model.ObjectVersion;
 import software.amazon.awssdk.services.s3.paginators.ListObjectVersionsIterable;
 
 /**
@@ -47,10 +45,12 @@ public class VersionManager {
 	private String[] prefixes = null;
 	private boolean dryRun = true;
 	private String profile = "default";
-	private boolean verbose = true;
+	private boolean verbose = false;
+	private int maxThreads = 8;
 
 	//internal fields
-	private LinkedHashMap<String, AwsKey> keyObj = new LinkedHashMap<String, AwsKey>();
+	private ArrayList<ListObjectVersionsResponse> jobsToProcess = new ArrayList<ListObjectVersionsResponse>();
+	private boolean lastJobAdded = false;
 	private String region = null;
 	private S3Client s3 = null;
 	private long bytesDeleted = 0;
@@ -60,7 +60,8 @@ public class VersionManager {
 	private long numberMarksScanned = 0;
 	private long numberMarksDeleted = 0;
 	private int exitCode = -1;
-	
+	private ProfileCredentialsProvider cred = null;
+
 
 	public VersionManager (String[] args){
 		try {
@@ -71,7 +72,7 @@ public class VersionManager {
 			doWork();
 
 			double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
-			pl("\nDone! "+Math.round(diffTime)+" minutes\n");
+			pl("\nDone! "+Util.formatNumber(diffTime, 2)+" minutes\n");
 			exitCode = 0;
 
 		} catch (Exception ex) {
@@ -85,301 +86,74 @@ public class VersionManager {
 	}
 
 	private void doWork() throws Exception {
-		
+
 		//make the client
-		ProfileCredentialsProvider cred = ProfileCredentialsProvider.builder().profileName(profile).build();
 		s3 = S3Client.builder()
 				.credentialsProvider(cred)
 				.region(Region.of(region))
 				.build();
 
-		if (verbose) pl("\nScanning objects and deletion markers (KeyName Type Message VersionID IsLatest DaysOld GBSize):");
 		walkObjectVersions();
-		
+
 		printResults();
 
 		if (s3 != null) s3.close();
 	}
 
 	public void walkObjectVersions() throws Exception {
+		if (verbose) pl("\nScanning objects and deletion markers (KeyName Type Message VersionID IsLatest DaysOld GBSize):");
+		else  p("\nScanning objects and deletion markers");
 
-			ListObjectVersionsIterable versionList = s3.listObjectVersionsPaginator(ListObjectVersionsRequest.builder()
-					.maxKeys(1000)
-					.bucket(bucketName)
-					.build());
-			
-			//for each response of 1000 keys
-			for (ListObjectVersionsResponse response : versionList) {
-				keyObj.clear();
-				loadVersions(response);
-				loadMarks(response);
-				processKeys();
-			}
-	}
+		ListObjectVersionsIterable versionList = s3.listObjectVersionsPaginator(ListObjectVersionsRequest.builder()
+				.maxKeys(1000)
+				.bucket(bucketName)
+				.build());
 
-	private void processKeys() {
-		numberKeysScanned+= keyObj.size();
-		
-		for (String key: keyObj.keySet()) {
-			
-			String message = null;
-			//any must match suffixes?
-			if (suffixes != null) {
-				boolean suffixMatched = false;
-				for (String s: suffixes) {
-					if (key.endsWith(s)) {
-						suffixMatched = true;
-						break;
-					}
-				}
-				if (suffixMatched == false) message = "KEEP_NoMatchingSuffix";
-			}
-			//any must match prefix?
-			if (message == null && prefixes != null) {
-				boolean prefixesMatched = false;
-				for (String s: prefixes) {
-					if (key.startsWith(s)) {
-						prefixesMatched = true;
-						break;
-					}
-				}
-				if (prefixesMatched == false) message = "KEEP_NoMatchingPrefix";
-			}
+		VersionWorker[] vws = new VersionWorker[maxThreads];
+		for (int i=0; i< maxThreads; i++) vws[i] = new VersionWorker(this, "T"+(i+1));
 
-			//process the key?
-			AwsKey ak = keyObj.get(key);
-			if (message == null) ak.trimObjects(minDaysOld, this, key);
-			else if (verbose) ak.writeAll(message);
-		}
-	}
-
-	private void loadMarks(ListObjectVersionsResponse response) {
-		for (DeleteMarkerEntry marker : response.deleteMarkers()) {
-			numberMarksScanned++;
-			AwsKey key = keyObj.get(marker.key());
-			if (key == null) {
-				key = new AwsKey();
-				keyObj.put(marker.key(), key);
-			}
-			key.addMarks(marker);
-		}
-	}
-
-	private void loadVersions(ListObjectVersionsResponse response) {
-		for (ObjectVersion version : response.versions()) {
-			numberObjectsScanned++;
-			String key = version.key();
-			AwsKey awskey = keyObj.get(key);
-			if (awskey == null) {
-				awskey = new AwsKey();
-				keyObj.put(key, awskey);
-			}
-			awskey.addVersion(version);
-		}
-	}
-	
-	public void deleteObject(ObjectVersion ov, String message) {
-		numberObjectsDeleted++;
-		bytesDeleted+= ov.size();
-		if (verbose) Util.pl(AwsKey.objectToString(ov, message));
-		
-		//really delete it?
-		if (dryRun == false) {
-			s3.deleteObject(DeleteObjectRequest.builder()
-					.bucket(bucketName)
-					.key(ov.key())
-					.versionId(ov.versionId())
-					.build()); 
-		}
-	}
-
-	public void deleteMarkers(ArrayList<DeleteMarkerEntry> markers, String message) {
-		if (markers != null) {
-			for (DeleteMarkerEntry m : markers) deleteMarker(m, message);
-		}
-		
-	}
-
-	private void deleteMarker(DeleteMarkerEntry m, String message) {
-		numberMarksDeleted++;
-		if (verbose) Util.pl(AwsKey.markerToString(m, message));
-		
-		//really delete it?
-		if (dryRun == false) {
-			s3.deleteObject(DeleteObjectRequest.builder()
-					.bucket(bucketName)
-					.key(m.key())
-					.versionId(m.versionId())
-					.build());
-		}
-	}
-
-	/*
-	private String deleteMarkerOld(DeleteMarkerEntry marker) {
-		double daysOld = daysOld(marker.lastModified());
-		String key = marker.key();
-		StringBuilder sb = new StringBuilder("\t");
-		sb.append(key); sb.append("\t");
-		sb.append(marker.versionId()); sb.append("\t");
-		sb.append(Util.formatNumber(daysOld, 2)); sb.append("\t0");
-		String tailMessage = sb.toString();
-		
-		if (deleteAll) return "DELETE_All" + tailMessage;
-	
-		//any must match suffixes?
-		if (suffixes != null) {
-			boolean suffixMatched = false;
-			for (String s: suffixes) {
-				if (key.endsWith(s)) {
-					suffixMatched = true;
-					break;
-				}
-			}
-			if (suffixMatched == false) return "KEEP_NoMatchingSuffix"+ tailMessage;
+		ExecutorService executor = Executors.newFixedThreadPool(maxThreads);
+		for (int i=0; i< maxThreads; i++) {
+			vws[i] = new VersionWorker(this, "T"+(i+1));
+			executor.execute(vws[i]);
 		}
 
-		//any must match prefix?
-		if (prefixes != null) {
-			boolean prefixesMatched = false;
-			for (String s: prefixes) {
-				if (key.startsWith(s)) {
-					prefixesMatched = true;
-					break;
-				}
-			}
-			if (prefixesMatched == false) return "KEEP_NoMatchingPrefix"+ tailMessage;
+		//for each response of 1000 keys
+		int numResponsesAdded = 0;
+		for (ListObjectVersionsResponse response : versionList) {
+			if (verbose==false) p(".");
+			numResponsesAdded++;
+			jobsToProcess.add(response);
 		}
-		
-		//check age
-		if (minDaysOld != 0) {
-			if (daysOld < minDaysOld) return "KEEP_DaysOld"+ tailMessage;
-		}
+		lastJobAdded = true;
+		if (verbose==false) pl("");
 
-		return "DELETE"+ tailMessage;
-	}
+		executor.shutdown();
+		while (!executor.isTerminated()) {}  //wait here until complete
 
-	private String deleteVersion(ObjectVersion version) {
-		
-		double daysOld = daysOld(version.lastModified());
-		double gbSize = Util.gigaBytes(version.size());
-		String key = version.key();
-		
-		StringBuilder sb = new StringBuilder("\t");
-		sb.append(key); sb.append("\t");
-		sb.append(version.versionId()); sb.append("\t");
-		sb.append(Util.formatNumber(daysOld, 2)); sb.append("\t");
-		if (gbSize >= 0.01) sb.append(Util.formatNumber(gbSize, 2));
-		else sb.append(Util.formatNumber(gbSize, 9));
-		String tailMessage = sb.toString();
-		
-		//Message S3Uri VersionID DaysOld GBSize
-		
-		if (deleteAll) return "DELETE_All" + tailMessage;
-
-		//is this the latest with no deletion mark then don't delete it
-		if (version.isLatest()) return "KEEP_LatestVersion"+ tailMessage;
-
-		//any must match suffixes?
-		if (suffixes != null) {
-			boolean suffixMatched = false;
-			for (String s: suffixes) {
-				if (key.endsWith(s)) {
-					suffixMatched = true;
-					break;
-				}
-			}
-			if (suffixMatched == false) return "KEEP_NoMatchingSuffix"+ tailMessage;
+		//check loaders and update counters
+		int responsesProcessed = 0;
+		for (VersionWorker vw: vws) {
+			if (vw.isFailed() || vw.isComplete()== false) throw new IOException("ERROR: VersionWorker failed "+vw.getThreadName());
+			numberKeysScanned += vw.getNumberKeysScanned();
+			numberObjectsScanned += vw.getNumberObjectsScanned();
+			numberObjectsDeleted += vw.getNumberObjectsDeleted();
+			numberMarksScanned += vw.getNumberMarksScanned();
+			numberMarksDeleted += vw.getNumberMarksDeleted();
+			bytesDeleted += vw.getBytesDeleted();
+			responsesProcessed+= vw.getNumberResponsesReceived();
 		}
 
-		//any must match prefix?
-		if (prefixes != null) {
-			boolean prefixesMatched = false;
-			for (String s: prefixes) {
-				if (key.startsWith(s)) {
-					prefixesMatched = true;
-					break;
-				}
-			}
-			if (prefixesMatched == false) return "KEEP_NoMatchingPrefix"+ tailMessage;
-		}
-		
-		//check age
-		if (minDaysOld != 0) {
-			if (daysOld < minDaysOld) return "KEEP_DaysOld"+ tailMessage;
-		}
-		//check size
-		if (minGigaBytes !=0) {
-			double gb = Util.gigaBytes(version.size());
-			if (gb < minGigaBytes) return gb+"KEEP_Size"+ tailMessage;
-		}
+		if (responsesProcessed != numResponsesAdded) throw new IOException ("ResponseJobCheck failed: "+numResponsesAdded+" is not equal to "+responsesProcessed);
 
-		return "DELETE"+ tailMessage;
-	}
-	
-	private double daysOld(Instant i) {
-		long secLastMod = i.getEpochSecond();
-		long secNow = Instant.now().getEpochSecond();
-		long secOld = secNow - secLastMod;
-		return (double)secOld/86400.0;
 	}
 
 
-	public static void listBucketObjects(S3Client s3, String bucketName ) {
 
-		try {
-
-			boolean isTruncated = true;
-			while(isTruncated) {
-				ListObjectsV2Iterable objectListing = s3.listObjectsV2Paginator(ListObjectsV2Request.builder()
-						.bucket(bucketName)
-						.build());
-				for (ListObjectsV2Response response : objectListing) {
-					for (S3Object s3Object : response.contents()) {
-						//do something
-						s3.deleteObject(DeleteObjectRequest.builder()
-								.bucket(bucketName)
-								.key(s3Object.key())
-								.build());
-					}
-					isTruncated = response.isTruncated();
-				}
-			}
-
-		} catch (S3Exception e) {
-			System.err.println(e.awsErrorDetails().errorMessage());
-			System.exit(1);
-		}
-	}*/
-
-
-	/**Attempts 's3.deleteObject(bucketName, key)' maxTries before throwing error message
-	private void tryDeleteObject(String bucketName, String key) throws IOException {	
-		int attempt = 0;
-		String error = null;
-		while (attempt++ < maxTries) {
-			try {
-				//s3.deleteObject(bucketName, key);
-				return;
-			} catch (AmazonServiceException ase) {
-				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 's3.deleteObject(bucketName, key)' trying again, "+attempt);
-			}
-			catch (SdkClientException sce) {
-				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 's3.deleteObject(bucketName, key)' trying again, "+attempt);
-			};
-		}
-		//only hits this if all the attempts failed
-		throw new IOException("ERROR failed to delete "+key+" from "+bucketName+" S3 error message:\n"+error);
+	synchronized ListObjectVersionsResponse fetchNextJob() {
+		if (jobsToProcess.size()!=0) return jobsToProcess.remove(jobsToProcess.size()-1);
+		else return null;
 	}
-	private void sleep(String message) {
-		try {
-			pl(message+", sleeping "+minToWait+" minutes");
-			TimeUnit.MINUTES.sleep(minToWait);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		}
-	}*/
 
 	private void printResults() throws IOException {
 
@@ -402,7 +176,7 @@ public class VersionManager {
 	public static void p(String s) {
 		System.out.print(s);
 	}
-	public static void el(String s) {
+	public synchronized void el(String s) {
 		System.err.println(s);
 	}
 
@@ -427,13 +201,13 @@ public class VersionManager {
 				char test = args[i].charAt(1);
 				switch (test){
 				case 'b': bucketName = args[++i]; break;
-				case 'l': region = args[++i]; break;
 				case 'c': profile = args[++i]; break;
 				case 'a': minDaysOld = Integer.parseInt(args[++i]); break;
 				case 's': suffixes = Util.COMMA.split(args[++i]); break;
 				case 'p': prefixes = Util.COMMA.split(args[++i]); break;
 				case 'r': dryRun = false; break;
-				case 'q': verbose = false; break;
+				case 'v': verbose = false; break;
+				case 't': maxThreads = Integer.parseInt(args[++i]); break;
 				case 'h': printDocs(); System.exit(0);
 				default: Util.printExit("\nProblem, unknown option! " + mat.group());
 				}
@@ -446,15 +220,19 @@ public class VersionManager {
 			System.exit(1);
 		}
 
-		//pull region from credentials
-		if (region == null) {
-			el("\nError: please provide the region location of the bucket, e.g. us-west-2 \n");
-			System.exit(1);
-		}
+		//set number of threads
+		int availThreads = Runtime.getRuntime().availableProcessors()-1;
+		if (maxThreads > availThreads) maxThreads = availThreads;
+
+		//fetch region from credentials
+		region = Util.getRegionFromCredentials(profile);		
+		if (region == null) Util.printErrAndExit("\nERROR: failed to find your region in ~/.aws/credentials for the profile ["+profile+"]");
+		cred = ProfileCredentialsProvider.builder().profileName(profile).build();
 
 		printOptions();
 
 	}	
+
 
 
 	private void printOptions() {
@@ -466,13 +244,14 @@ public class VersionManager {
 		pl("  -p Obj key prefixes         : "+ Util.stringArrayToString(prefixes, ","));
 		pl("  -a Min age, days            : "+ minDaysOld);
 		pl("  -r Dry run?                 : "+ dryRun);
-		pl("  -q Verbose output           : "+ verbose);
+		pl("  -v Verbose output           : "+ verbose);
+		pl("  -t Maximum threads          : "+ maxThreads);
 	}
 
 	public static void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                             AWS S3 Version Manager : January 2022                **\n" +
+				"**                             AWS S3 Version Manager :  August 2023                **\n" +
 				"**************************************************************************************\n" +
 				"Bucket versioning in S3 protects objects from being deleted or overwritten by hiding\n"+
 				"the original when 'deleting' or over writing an existing object. Use this tool to \n"+
@@ -491,11 +270,10 @@ public class VersionManager {
 				"   https://aws.amazon.com/cli\n"+
 				"3) Use cli commands like 'aws s3 rm s3://myBucket/myObj.txt' or the AWS web Console to\n"+
 				"   'delete' particular objects. Then run this app to actually delete them.\n"+
-				
+
 
 				"\nRequired Parameters:\n"+
 				"-b Versioned S3 bucket name\n"+
-				"-l Bucket region location\n"+
 
 				"\nOptional Parameters:\n" +
 				"-r Perform a real run, defaults to a dry run where no objects are deleted\n"+
@@ -503,10 +281,11 @@ public class VersionManager {
 				"-a Minimum age, in days, of object to delete, defaults to 30\n"+
 				"-s Object key suffixes to delete, comma delimited, no spaces\n"+
 				"-p Object key prefixes to delete, comma delimited, no spaces\n"+
-				"-q Quiet output.\n"+
+				"-v Verbose output\n"+
+				"-t Maximum threads to use, defaults to 8\n"+
 
 				"\nExample: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test \n"+
-				"     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab -l us-west-2\n\n"+
+				"     -s .cram,.bam,.gz,.zip -a 7 -c MiloLab\n\n"+
 
 				"**************************************************************************************\n");
 	}
@@ -537,5 +316,37 @@ public class VersionManager {
 
 	public long getNumberMarksDeleted() {
 		return numberMarksDeleted;
+	}
+
+	public ProfileCredentialsProvider getCred() {
+		return cred;
+	}
+
+	public String getRegion() {
+		return region;
+	}
+
+	public String getBucketName() {
+		return bucketName;
+	}
+
+	public int getMinDaysOld() {
+		return minDaysOld;
+	}
+
+	public String[] getSuffixes() {
+		return suffixes;
+	}
+
+	public String[] getPrefixes() {
+		return prefixes;
+	}
+
+	public boolean isDryRun() {
+		return dryRun;
+	}
+
+	public boolean isLastJobAdded() {
+		return lastJobAdded;
 	}
 }

@@ -21,6 +21,10 @@ import java.util.HashMap;
 		region = us-west-2	
 	  Alternatively, run the 'aws configure' cmd.
 
+
+CHECK that versioning is on and all life cycle rules are deleted!!!!! Ugg. 1/2 a day wasted to unnecessary debugging!
+
+
  */
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class TestVersionManager {
@@ -29,7 +33,6 @@ public class TestVersionManager {
 
 	/**Be sure this bucket exists, is private, versioning enabled, and doesn't contain anything you care about. WARNING, it will be emptied!*/
 	private static final String bucketName = "hcibioinfo-nix-test";
-	private static final String bucketRegion = "us-west-2";
 
 	/**Directory in the AwsApps project containing the JobRunner test files. */
 	private static final File testDataDir = new File("/Users/u0028003/Code/AwsApps/TestData/VersionManager");
@@ -60,7 +63,7 @@ public class TestVersionManager {
 	public void testDefaultParams() {
 		try {
 			//this is actually age >= 7 days
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-l", bucketRegion});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -78,7 +81,7 @@ public class TestVersionManager {
 	public void testAgeZero() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-l", bucketRegion});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0"});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -96,7 +99,7 @@ public class TestVersionManager {
 	public void testPrefix() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-p", "Larry,Delme,Susan", "-l", bucketRegion});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-p", "Larry,Delme,Susan"});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -114,7 +117,7 @@ public class TestVersionManager {
 	public void testSuffix() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-s", "Larry,.delme,Susan", "-l", bucketRegion});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-s", "Larry,.delme,Susan"});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -132,7 +135,7 @@ public class TestVersionManager {
 	public void testZDelete() {
 		try {
 			
-			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-r", "-l", bucketRegion});
+			VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-a", "0", "-r"});
 			assertTrue( vm.getExitCode() == 0);
 			assertTrue(vm.getNumberKeysScanned() == 5);
 			assertTrue(vm.getNumberObjectsScanned() == 6);
@@ -156,7 +159,7 @@ public class TestVersionManager {
 		if (exitCode !=0) return false;
 		
 		//use the VersionManager to delete everything
-		VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-r", "-a", "0", "-q", "-l", bucketRegion});
+		VersionManager vm = new VersionManager(new String[] {"-b", bucketName, "-r", "-a", "0"});
 		exitCode = vm.getExitCode();
 		
 		if (exitCode == 0) return true;
@@ -169,8 +172,7 @@ public class TestVersionManager {
 		String testA = new File(testDataDir, "testA.txt").getAbsolutePath();
 		String testB = new File(testDataDir, "testB.txt").getAbsolutePath();
 		
-		// upload the first
-	    // overwrite the first with testB.txt, this will be the latest and shouldn't be deleted, the overwritten obj is still there with isLatest=false
+		// upload the first and overwrite the first with testB.txt, this will be the latest and shouldn't be deleted, the overwritten obj is still there with isLatest=false
 		String[] cmd = new String[]{awsPath, "s3", "cp", testA , "s3://"+bucketName+"/test.txt"};
 		int exitCode = Util.executeReturnExitCode(cmd, false, true, envPropToAdd);
 		if (exitCode != 0) return false;
@@ -207,6 +209,8 @@ public class TestVersionManager {
 		cmd = new String[]{awsPath, "s3", "rm", "s3://"+bucketName+"/Delme/testA.txt"};
 		exitCode = Util.executeReturnExitCode(cmd, false, true, envPropToAdd);
 		if (exitCode != 0) return false;
+		
+		//should have 6 objects and 3 deletion markers
 		
 		return true;
 	}

@@ -46,15 +46,12 @@ public class CopyJobWorker implements Runnable {
 	public void run() {	
 		try {
 			CopyJob cj;
-			while ((cj = s3Copy.fetchNextCopyJob())!= null) {
-				Util.pl(cj+"\t"+ cj.restoreCopy(this));
-			}
-			shutdown();
-			
+			while ((cj = s3Copy.fetchNextCopyJob())!= null) Util.pl(cj+"\t"+ cj.restoreCopy(this));
 		} catch (Exception e) {
 			failed = true;
-			shutdown();
 			s3Copy.el(Util.getStackTrace(e));
+		} finally {
+			shutdown();
 		}
 	}
 	
@@ -109,12 +106,15 @@ public class CopyJobWorker implements Runnable {
 		String error = null;
 		while (attempt++ < maxTries) {
 			try {
+				//already placed?
 				GlacierJobParameters gjp = new GlacierJobParameters().withTier(tier);
 				RestoreObjectRequest requestRestore = new RestoreObjectRequest(bucketName, key, numberDaysToRestore).withGlacierJobParameters(gjp);
 				fetchS3Client(region).restoreObjectV2(requestRestore);
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
+				//already restore request placed?
+				if (error.contains("RestoreAlreadyInProgress")) return;
 				sleep("\tWARNING: failed restoreRequest trying again, "+attempt+"\n"+error);
 			}
 		}

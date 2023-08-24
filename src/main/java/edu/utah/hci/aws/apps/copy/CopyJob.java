@@ -113,18 +113,23 @@ public class CopyJob {
 	}
 
 	private String copyIt(CopyJobWorker cjw) throws Exception {
+		long startTime = System.currentTimeMillis();
+		String result = null;
 		//destination is s3?
 		if (destinationFile == null) {
 			cjw.s3S3Copy(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), destinationBucket, destinationKey, copyRequest.getDestinationRegion());
 			complete = true;
-			return "Copied";
+			result = "Copied ";
 		}
 		//destination is local
-		cjw.tryDownload(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), destinationFile);
-		complete = true;
-		return "Downloaded";
-		
-		
+		else {
+			cjw.tryDownload(source.getBucketName(), source.getKey(), copyRequest.getSourceRegion(), destinationFile);
+			complete = true;
+			result = "Downloaded ";
+		}
+		double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
+		String time = Util.formatNumber(diffTime, 1);
+		return result+time+" Min";
 	}
 
 	public boolean isError() {

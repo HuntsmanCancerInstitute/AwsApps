@@ -52,6 +52,7 @@ public class S3Copy {
 	private int maxThreads = 8;
 	private boolean recursiveCopy = false;
 	private Tier restoreTier = Tier.Standard;
+	private boolean hardExit = true; //for testing
 
 	//for looping till complete
 	private boolean rerunUntilComplete = false;
@@ -113,6 +114,7 @@ public class S3Copy {
 			double diffTime = ((double)(System.currentTimeMillis() -startTime))/60000;
 			pl("\nDone! "+Math.round(diffTime)+" minutes\n");
 			sendEmail();
+			if (hardExit) System.exit(0); //Really shouldn't have to do this! The app hangs without it.
 			
 		} catch (Exception e) {
 			resultsCheckOK = false;
@@ -319,14 +321,14 @@ public class S3Copy {
 			String message = "Subject: S3Copy" +status+ Util.getDateTime()+"\nFrom: noreply_s3copy@hci.utah.edu\n"+log.toString();
 			File tmpDir = new File(System.getProperty("java.io.tmpdir"));
 			if (tmpDir.exists()==false) throw new Exception("ERROR: failed to find tmp dir. "+tmpDir);
-			tmpEmailLog = new File(tmpDir, "S3Copy.tmp.txt");
+			tmpEmailLog = new File(tmpDir,"S3Copy."+ Util.getRandomString(4)+ ".tmp.txt");
 			tmpEmailLog.deleteOnExit();
 			Util.write(message, tmpEmailLog);
 			
 			//execute via a shell script
 			String cmd = "sendmail '"+email+"' < "+tmpEmailLog.getCanonicalPath();
 			int exit = Util.executeShellScriptReturnExitCode(cmd, tmpDir);
-			Util.pl("Sending email: "+cmd);
+			Util.pl("Sent email: "+cmd);
 			//this never happens?
 			if (exit != 0) throw new IOException ("\nERROR sending email with "+cmd);
 		} catch (Exception e) {
@@ -412,6 +414,7 @@ public class S3Copy {
 						case 'l': rerunUntilComplete = true; break;
 						case 't': maxThreads = Integer.parseInt(args[++i]); break;
 						case 'p': profile = args[++i]; break;
+						case 's': hardExit = false; break;
 						case 'h': printDocs(); System.exit(0);
 						case 'a': printDiffAccountInstructions(); 
 						default: Util.printExit("\nProblem, unknown option! " + mat.group());
@@ -531,10 +534,10 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   S3 Copy : Jan 2023                             **\n" +
+				"**                                   S3 Copy : Feb 2023                             **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
-				"accounts or downloads them to your local computer. Run this as a daemon with -x or run\n"+
+				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+
 				"repeatedly until complete. To upload files to S3, use the AWS CLI. \n"+
 
 				"\nTo use the app:\n"+ 
@@ -570,7 +573,7 @@ public class S3Copy {
 				"-n Number of days to keep restored files in S3, defaults to 1\n"+
 				"-a Print instructions for copying files between different accounts\n"+
 
-				"\nExample: java -Xmx20G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l\n"+
+				"\nExample: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l\n"+
 				"   -j 's3://source/Logs.zip>s3://destination/,s3://source/normal > ~/Downloads/' -r\n"+ 
 
 				"**************************************************************************************\n");
