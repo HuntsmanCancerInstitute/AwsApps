@@ -15,8 +15,6 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.iterable.S3Objects;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
-import com.amazonaws.services.s3.model.HeadBucketRequest;
-import com.amazonaws.services.s3.model.HeadBucketResult;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.model.Tier;
@@ -534,7 +532,7 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   S3 Copy : Feb 2023                             **\n" +
+				"**                                   S3 Copy : Nov 2023                             **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
 				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+

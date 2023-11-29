@@ -88,8 +88,10 @@ public class CopyJob {
 	public String restoreCopy(CopyJobWorker cjw) throws Exception {
 		if (complete) return "Complete";
 
-		//does it need to be restored? archived?
-		if (source.getStorageClass().equals("STANDARD") == false) {
+		//does it need to be restored? GLACIER and DEEP_ARCHIVE only
+		String sc = source.getStorageClass();
+		if (sc.equals("GLACIER") || sc.equals("DEEP_ARCHIVE")) {
+			//if (source.getStorageClass().equals("STANDARD") == false) {
 			//pull meta data
 			ObjectMetadata metaData = cjw.tryGetObjectMetadata(source.getBucketName(),  source.getKey(), copyRequest.getSourceRegion());
 			
