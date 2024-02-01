@@ -25,8 +25,8 @@ import java.util.List;
  * 1) Create two buckets on S3 for just testing. They will be cleared.
  * 2) Create a local credentials file ~/.aws/credentials with your access, secret, and region info, chmod 600 the file and keep it private.
 		[default]
-		aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A  
-		aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
+		aws_access_key_id = AKxxxxxxxxxxxxxxxxxxxxxxJK6A  
+		aws_secret_access_key = BgDV2UHxxxxxxxxxxxx5HZMpUQ
 		region = us-west-2	
  */
 public class TestS3Copy {

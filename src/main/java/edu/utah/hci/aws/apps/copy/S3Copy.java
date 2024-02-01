@@ -63,7 +63,7 @@ public class S3Copy {
 	private String region = null;
 	private boolean resultsCheckOK = true;
 	private int maxTries = 5;
-	private int minToWait = 5;
+	private int secToWait = 15;
 	private boolean printStackTrace = true;
 	private HashMap<String, AmazonS3> s3 = new HashMap<String, AmazonS3>();
 	private long numCopyJobsComplete = 0;
@@ -298,8 +298,8 @@ public class S3Copy {
 
 	private void sleep(String message) {
 		try {
-			pl(message+", sleeping "+minToWait+" minutes");
-			TimeUnit.MINUTES.sleep(minToWait);
+			pl(message+", sleeping "+secToWait+" seconds");
+			TimeUnit.SECONDS.sleep(secToWait);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
@@ -532,7 +532,7 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   S3 Copy : Nov 2023                             **\n" +
+				"**                                   S3 Copy : Dec 2023                             **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
 				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+
@@ -598,8 +598,8 @@ public class S3Copy {
 		return maxTries;
 	}
 
-	public int getMinToWait() {
-		return minToWait;
+	public int getSecToWait() {
+		return secToWait;
 	}
 
 	public ProfileCredentialsProvider getCredentials() {

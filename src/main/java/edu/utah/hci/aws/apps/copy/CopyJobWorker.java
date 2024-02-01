@@ -28,7 +28,7 @@ public class CopyJobWorker implements Runnable {
 	private String name = null;
 	private int maxTries;
 	private int numberDaysToRestore;
-	private int minToWait;
+	private int secToWait;
 	private HashMap<String, AmazonS3> s3 = new HashMap<String, AmazonS3>();
 	private HashMap<String, TransferManager> tm = new HashMap<String, TransferManager>();
 	
@@ -38,7 +38,7 @@ public class CopyJobWorker implements Runnable {
 		this.name = name;
 		this.maxTries = s3Copy.getMaxTries();
 		this.numberDaysToRestore = s3Copy.getNumberDaysToRestore();
-		this.minToWait = s3Copy.getMinToWait();
+		this.secToWait = s3Copy.getSecToWait();
 	}
 	
 	
@@ -177,8 +177,8 @@ public class CopyJobWorker implements Runnable {
 
 	private void sleep(String message) {
 		try {
-			s3Copy.pl(message+", sleeping "+minToWait+" minutes");
-			TimeUnit.MINUTES.sleep(minToWait);
+			s3Copy.pl(message+", sleeping "+secToWait+" seconds");
+			TimeUnit.SECONDS.sleep(secToWait);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
