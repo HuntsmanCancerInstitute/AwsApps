@@ -115,7 +115,7 @@ public class CopyJobWorker implements Runnable {
 				error = Util.getStackTrace(ase);
 				//already restore request placed?
 				if (error.contains("RestoreAlreadyInProgress")) return;
-				sleep("\tWARNING: failed restoreRequest trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed restoreRequest trying again, "+attempt);
 			}
 		}
 		//only hits this if all the attempts failed
@@ -132,15 +132,15 @@ public class CopyJobWorker implements Runnable {
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
 			}
 			catch ( InterruptedException ie) {
 				error = Util.getStackTrace(ie);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
 			}
 			catch (SdkClientException sce) {
 				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.copy(sourceBucket, sourceObjectKey, destBucket, destObjectKey)' trying again, "+attempt);
 			};
 		}
 		//only hits this if all the attempts failed
@@ -159,15 +159,15 @@ public class CopyJobWorker implements Runnable {
 				return;
 			} catch (AmazonServiceException ase) {
 				error = Util.getStackTrace(ase);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
 			}
 			catch ( InterruptedException ie) {
 				error = Util.getStackTrace(ie);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
 			}
 			catch (SdkClientException sce) {
 				error = Util.getStackTrace(sce);
-				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt+"\n"+error);
+				sleep("\tWARNING: failed 'tm.download(bucketName, key)' trying again, "+attempt);
 			};
 		}
 		//only hits this if all the attempts failed
