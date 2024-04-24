@@ -532,7 +532,7 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                   S3 Copy : Dec 2023                             **\n" +
+				"**                                   S3 Copy : Feb 2024                             **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
 				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+

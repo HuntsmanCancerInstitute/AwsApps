@@ -206,7 +206,7 @@ public class VersionManager {
 				case 's': suffixes = Util.COMMA.split(args[++i]); break;
 				case 'p': prefixes = Util.COMMA.split(args[++i]); break;
 				case 'r': dryRun = false; break;
-				case 'v': verbose = false; break;
+				case 'v': verbose = true; break;
 				case 't': maxThreads = Integer.parseInt(args[++i]); break;
 				case 'h': printDocs(); System.exit(0);
 				default: Util.printExit("\nProblem, unknown option! " + mat.group());
@@ -251,7 +251,7 @@ public class VersionManager {
 	public static void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                             AWS S3 Version Manager :  August 2023                **\n" +
+				"**                             AWS S3 Version Manager :  April 2024                 **\n" +
 				"**************************************************************************************\n" +
 				"Bucket versioning in S3 protects objects from being deleted or overwritten by hiding\n"+
 				"the original when 'deleting' or over writing an existing object. Use this tool to \n"+
