@@ -58,6 +58,7 @@ public class S3Copy {
 	private int iterations = 100;
 
 	//internal fields
+	private String defaultRegion = "us-east-1";
 	private CopyRequest[] copyRequests = null; 
 	private StringBuilder log = new StringBuilder();
 	private String region = null;
@@ -432,8 +433,8 @@ public class S3Copy {
 
 			if (jobString == null) Util.printErrAndExit("\nERROR: please provide a file path or string with copy job information, see the help menu.\n");
 
-			region = Util.getRegionFromCredentials(profile);		
-			if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile and or region in ~/.aws/credentials, "+profile);
+			region = Util.getRegionFromCredentials(profile, defaultRegion);		
+			if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile in ~/.aws/credentials, "+profile);
 			credentials = new ProfileCredentialsProvider(profile);
 
 		} catch (Exception e) {
@@ -532,7 +533,7 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                  S3 Copy : April 2024                            **\n" +
+				"**                                  S3 Copy : May 2024                              **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
 				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+

@@ -33,7 +33,9 @@ import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeMessage;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.HeadBucketRequest;
 import com.amazonaws.services.s3.model.HeadBucketResult;
 import com.amazonaws.services.s3.transfer.Transfer;
@@ -55,8 +57,21 @@ public class Util {
 		return gigaBytes(bytes);
 	}
 	
+	/**100 GB (107,374,182,400 bytes) of data in Amazon S3 Standard*/
 	public static double gigaBytes(double bytes) {
 		return bytes / 1073741824.0;
+	}
+	
+	/**100 TB (109,951,162,777,600 bytes) of data in Amazon S3 Standard*/
+	public static double teraBytes(double bytes) {
+		return bytes / 1099511627776.0;
+	}
+	
+	public static final NumberFormat dollarFormatter = NumberFormat.getCurrencyInstance();
+	public static String formatBytesToAwsCost (long bytes, double costPerTB) {
+		double tb = teraBytes(bytes);
+		double cost = tb/costPerTB;
+		return dollarFormatter.format(cost);
 	}
 	
 	public static int ageOfFileInDays (File f) throws IOException {
@@ -150,15 +165,46 @@ public class Util {
 		return region;
 	}
 	
-	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null if nothing found.*/
+	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null the profile wasn't found
+	 * and either the profile's region or the default.*/
+	public static String getRegionFromCredentials(String profile, String defaultRegion) throws IOException {
+		String path = System.getProperty("user.home")+"/.aws/credentials";
+		File cred = new File (path);
+		if (cred.exists() == false) throw new IOException("Failed to find your ~/.aws/credentials file?");
+		String[] lines = Util.loadTxtFile(cred);
+		String lookFor = "["+profile+"]";
+		boolean profileFound = false;
+		for (int i=0; i<lines.length; i++) {
+			if (lines[i].equals(lookFor)) {
+				profileFound = true;
+				for (int j=i+1; j< lines.length; j++) {
+					if (lines[j].startsWith("[")) break;
+					else if (lines[j].startsWith("region")) {
+						String[] tokens = Util.EQUALS.split(lines[j]);
+						if (tokens.length !=2) throw new IOException("Failed to split your region key in two, "+lines[j]); 
+						return tokens[1];
+					}
+				}
+			}
+		}
+		//Was the profile found?
+		if (profileFound) return defaultRegion;
+		//Thus profile not found
+		return null;
+	}
+	
+	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null the profile wasn't found
+	 * and either the profile's region or the default.*/
 	public static String getRegionFromCredentials(String profile) throws IOException {
 		String path = System.getProperty("user.home")+"/.aws/credentials";
 		File cred = new File (path);
 		if (cred.exists() == false) throw new IOException("Failed to find your ~/.aws/credentials file?");
 		String[] lines = Util.loadTxtFile(cred);
 		String lookFor = "["+profile+"]";
+		boolean profileFound = false;
 		for (int i=0; i<lines.length; i++) {
 			if (lines[i].equals(lookFor)) {
+				profileFound = true;
 				for (int j=i+1; j< lines.length; j++) {
 					if (lines[j].startsWith("[")) break;
 					else if (lines[j].startsWith("region")) {
@@ -195,6 +241,16 @@ public class Util {
 			else throw new IOException("FAILED to fetch the region for bucket "+bucketName+", does it exist? Error message: "+message);
 		}
 		return region;
+	}
+	
+	public static void main (String[] args) throws IOException {
+		ProfileCredentialsProvider credentials = new ProfileCredentialsProvider("kohli");
+		String region = "us-east-1";
+		AmazonS3 s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(region).build();
+		Util.pl(Util.fetchBucketRegion(s3Client, "hci-kohli-temp-transfers"));
+		
+		
+		
 	}
 	
 	/**Converts milliseconds to days.*/
