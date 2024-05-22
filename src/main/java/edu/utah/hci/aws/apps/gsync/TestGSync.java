@@ -649,7 +649,7 @@ public class TestGSync {
 	private HashMap<String, S3ObjectSummary> fetchS3Objects() {
 		AmazonS3 s3 = null;
 		try {
-			String region = Util.getRegionFromCredentials();
+			String region = Util.fetchBucketRegion("default", testS3BucketName);
 			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 
 			HashMap<String, S3ObjectSummary> kos = new HashMap<String, S3ObjectSummary>();
@@ -677,7 +677,7 @@ public class TestGSync {
 	private void deleteS3Object(String key) {
 		AmazonS3 s3 = null;
 		try {
-			String region = Util.getRegionFromCredentials();
+			String region = Util.fetchBucketRegion("default", testS3BucketName);
 			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 			s3.deleteObject(testS3BucketName, key);
 
@@ -695,7 +695,7 @@ public class TestGSync {
 	private void emptyS3Bucket() {
 		AmazonS3 s3 = null;
 		try {
-			String region = Util.getRegionFromCredentials();
+			String region = Util.fetchBucketRegion("default", testS3BucketName);
 			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
 
 			ListObjectsV2Result result = s3.listObjectsV2(testS3BucketName);

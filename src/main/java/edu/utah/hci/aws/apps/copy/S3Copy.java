@@ -58,10 +58,8 @@ public class S3Copy {
 	private int iterations = 100;
 
 	//internal fields
-	private String defaultRegion = "us-east-1";
 	private CopyRequest[] copyRequests = null; 
 	private StringBuilder log = new StringBuilder();
-	private String region = null;
 	private boolean resultsCheckOK = true;
 	private int maxTries = 5;
 	private int secToWait = 15;
@@ -156,14 +154,12 @@ public class S3Copy {
 		
 		//for each one
 		HashMap<String, String> bucketNameRegion = new HashMap<String, String>();
-		AmazonS3 userS3 = fetchS3Client(region);
+		
 		ArrayList<String> errorMessages = new ArrayList<String>();
 		for (String bn: bucketNames) {
 			try {
-				String bucketRegion = Util.fetchBucketRegion(userS3, bn);
+				String bucketRegion = Util.fetchBucketRegion(profile, bn);
 				 bucketNameRegion.put(bn, bucketRegion);
-				//if (regionAccess[1].equals("OK")) bucketNameRegion.put(bn, regionAccess[0]);
-				//else errorMessages.add("Cannot access bucket: "+bn);
 			} catch (Exception e) {
 				errorMessages.add(e.getMessage());
 			}
@@ -433,8 +429,6 @@ public class S3Copy {
 
 			if (jobString == null) Util.printErrAndExit("\nERROR: please provide a file path or string with copy job information, see the help menu.\n");
 
-			region = Util.getRegionFromCredentials(profile, defaultRegion);		
-			if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile in ~/.aws/credentials, "+profile);
 			credentials = new ProfileCredentialsProvider(profile);
 
 		} catch (Exception e) {
@@ -585,10 +579,6 @@ public class S3Copy {
 
 	public boolean isDryRun() {
 		return dryRun;
-	}
-
-	public String getRegion() {
-		return region;
 	}
 
 	public int getNumberDaysToRestore() {

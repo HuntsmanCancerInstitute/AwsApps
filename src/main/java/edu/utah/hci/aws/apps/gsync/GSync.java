@@ -123,7 +123,7 @@ public class GSync {
 
 	void doWork() {
 		try {
-			region = Util.getRegionFromCredentials();
+			region = Util.fetchBucketRegion("default", bucketName);
 
 			initializeFields();
 
@@ -1147,6 +1147,9 @@ public class GSync {
 				"**************************************************************************************\n" +
 				"**                                   GSync : June 2020                              **\n" +
 				"**************************************************************************************\n" +
+				"This is depreciated and should not be used\n\n"+
+				
+				
 				"GSync pushes files with a particular extension that exceed a given size and age to \n" +
 				"Amazon's S3 object store. Associated genomic index files are also moved. Once \n"+
 				"correctly uploaded, GSync replaces the original file with a local txt placeholder file \n"+

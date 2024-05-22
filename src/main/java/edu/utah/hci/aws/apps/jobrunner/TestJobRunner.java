@@ -36,6 +36,7 @@ public class TestJobRunner {
 
 	/**Be sure this bucket exists, is private, and doesn't contain anything you care about. WARNING, it will be emptied!*/
 	private static final String s3BucketUri = "s3://hcibioinfo-jobrunner-test/";
+	private static final String s3BucketName = "hcibioinfo-jobrunner-test";
 
 	/**Directory in the AwsApps project containing the JobRunner test files. */
 	private static final File testDataDir = new File("/Users/u0028003/Code/AwsApps/TestData/JobRunner");
@@ -44,6 +45,7 @@ public class TestJobRunner {
 	private static final File awsTmpDir = new File("/Users/u0028003/TmpDelmeAWS");
 
 	private static final File awsCredentialsFile = new File("/Users/u0028003/.aws/credentials");
+	private static final String profile = "default";
 
 	private static final String awsPath="/usr/local/bin/aws";
 
@@ -340,7 +342,7 @@ public class TestJobRunner {
 			envPropToAdd.put("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin");
 		}
 
-		region = Util.getRegionFromCredentials();
+		region = Util.fetchBucketRegion(profile, s3BucketName);
 	}
 
 	public static void p(String s) {

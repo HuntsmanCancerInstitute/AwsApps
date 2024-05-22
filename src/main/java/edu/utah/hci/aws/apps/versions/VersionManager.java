@@ -219,15 +219,21 @@ public class VersionManager {
 			el("\nError: please provide the name of a versioned AWS S3 bucket.\n");
 			System.exit(1);
 		}
+		if (bucketName.contains("/")) {
+			el("\nError: please remove any s3:// or / from your bucket name.\n");
+			System.exit(1);
+		}
 
 		//set number of threads
 		int availThreads = Runtime.getRuntime().availableProcessors()-1;
 		if (maxThreads > availThreads) maxThreads = availThreads;
 
-		//fetch region from credentials
-		region = Util.getRegionFromCredentials(profile);		
-		if (region == null) Util.printErrAndExit("\nERROR: failed to find your region in ~/.aws/credentials for the profile ["+profile+"]");
+		//fetch region from credentials or use the default
+		
+		//region = Util.getRegionFromCredentials(profile);		
+		//if (region == null) Util.printErrAndExit("\nERROR: failed to find your profile in ~/.aws/credentials for ["+profile+"]");
 		cred = ProfileCredentialsProvider.builder().profileName(profile).build();
+		region = Util.fetchBucketRegion(profile, bucketName);
 
 		printOptions();
 

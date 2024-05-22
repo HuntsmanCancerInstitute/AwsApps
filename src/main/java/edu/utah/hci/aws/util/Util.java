@@ -42,6 +42,8 @@ import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.Transfer.TransferState;
 import com.amazonaws.services.s3.transfer.TransferProgress;
 
+import software.amazon.awssdk.regions.Region;
+
 /**Static utility methods.*/
 public class Util {
 
@@ -154,7 +156,7 @@ public class Util {
 		return attributes;
 	}
 	
-	/**Extracts the region from the ~/.aws/credentials file. Can only be one profile.*/
+	/**Extracts the region from the ~/.aws/credentials file. Can only be one profile.
 	public static String getRegionFromCredentials() throws IOException {
 		String path = System.getProperty("user.home")+"/.aws/credentials";
 		File cred = new File (path);
@@ -163,10 +165,10 @@ public class Util {
 		String region = a.get("region");
 		if (region == null) throw new IOException("Failed to find a 'region' key in ~/.aws/credentials file");
 		return region;
-	}
+	}*/
 	
 	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null the profile wasn't found
-	 * and either the profile's region or the default.*/
+	 * and either the profile's region or the default.
 	public static String getRegionFromCredentials(String profile, String defaultRegion) throws IOException {
 		String path = System.getProperty("user.home")+"/.aws/credentials";
 		File cred = new File (path);
@@ -191,10 +193,10 @@ public class Util {
 		if (profileFound) return defaultRegion;
 		//Thus profile not found
 		return null;
-	}
+	}*/
 	
 	/**Extracts the region from the ~/.aws/credentials file for a particular profile, returns null the profile wasn't found
-	 * and either the profile's region or the default.*/
+	 * and either the profile's region or the default.
 	public static String getRegionFromCredentials(String profile) throws IOException {
 		String path = System.getProperty("user.home")+"/.aws/credentials";
 		File cred = new File (path);
@@ -216,13 +218,13 @@ public class Util {
 			}
 		}
 		return null;
-	}
+	}*/
 	
 	public static final Pattern REGION_MESSAGE = Pattern.compile(".+region: ([\\w-]+)\\..+");
 	
 	/**Will fetch the region for any bucket.
 	 * @return bucket region
-	 * @throws IOException if the bucket doesn't exist.*/
+	 * @throws IOException if the bucket doesn't exist.
 	public static String fetchBucketRegion(AmazonS3 sourceS3, String bucketName) throws IOException{
 		String region = null;
 		try {
@@ -243,14 +245,76 @@ public class Util {
 		return region;
 	}
 	
-	public static void main (String[] args) throws IOException {
-		ProfileCredentialsProvider credentials = new ProfileCredentialsProvider("kohli");
-		String region = "us-east-1";
-		AmazonS3 s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(region).build();
-		Util.pl(Util.fetchBucketRegion(s3Client, "hci-kohli-temp-transfers"));
+	public static String fetchBucketRegion(String profile, String defaultRegion, String bucketName) throws Exception{
 		
+		ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+		AmazonS3 s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(defaultRegion).build();
+		String bucketRegion = Util.fetchBucketRegion(s3Client, bucketName);
+		s3Client.shutdown();
+		return bucketRegion;
+	}*/
+	
+	public static final String[] awsBucketRegions = {"us-east-1", "us-east-2", "us-west-1", "us-west-2", "ap-east-1", "ap-south-2", "ap-southeast-3", "ap-southeast-4", "ap-south-1", "af-south-1"};
+
+	/**Ridiculous loop to find a bucket's region. WTH AWS!
+	 * @return null if it can't determine the region. */
+	public static String fetchBucketRegion(String profile, String bucketName) throws Exception{
 		
+		ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+		String bucketRegion = null;
+		AmazonS3 s3Client = null;
 		
+		for (String abr: awsBucketRegions) {
+			s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(abr).build();
+			
+			try {
+				//use a head request to attempt to find the region for the given bucket, this typically fails
+				HeadBucketRequest request = new HeadBucketRequest(bucketName);
+				HeadBucketResult  res = s3Client.headBucket(request);
+				bucketRegion  = res.getBucketRegion();
+			} catch (Exception e) {
+				//attempt to parse the actual bucket region from the error message, ugg!
+				//'The bucket is in this region: us-east-2. Please use this region...'
+				String message = e.getMessage();
+				if (message.contains("bucket is in this region:")) {
+					Matcher mat = REGION_MESSAGE.matcher(message);
+					if (mat.matches()) bucketRegion = mat.group(1);
+				}
+			}
+			s3Client.shutdown();
+			if (bucketRegion != null) return bucketRegion;
+		}
+		return null;
+	}
+	
+	/**Ridiculous loop to find a bucket's region. WTH AWS!
+	 * @return null if it can't determine the region. */
+	public static String fetchBucketRegion(ProfileCredentialsProvider credentials, String bucketName) throws Exception{
+
+		String bucketRegion = null;
+		AmazonS3 s3Client = null;
+		
+		for (String abr: awsBucketRegions) {
+			s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(abr).build();
+			
+			try {
+				//use a head request to attempt to find the region for the given bucket, this typically fails
+				HeadBucketRequest request = new HeadBucketRequest(bucketName);
+				HeadBucketResult  res = s3Client.headBucket(request);
+				bucketRegion  = res.getBucketRegion();
+			} catch (Exception e) {
+				//attempt to parse the actual bucket region from the error message, ugg!
+				//'The bucket is in this region: us-east-2. Please use this region...'
+				String message = e.getMessage();
+				if (message.contains("bucket is in this region:")) {
+					Matcher mat = REGION_MESSAGE.matcher(message);
+					if (mat.matches()) bucketRegion = mat.group(1);
+				}
+			}
+			s3Client.shutdown();
+			if (bucketRegion != null) return bucketRegion;
+		}
+		return null;
 	}
 	
 	/**Converts milliseconds to days.*/

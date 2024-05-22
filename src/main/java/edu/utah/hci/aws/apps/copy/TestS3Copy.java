@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.SdkClientException;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
@@ -33,9 +34,10 @@ public class TestS3Copy {
 
 	/*Adjust these fields to match your testing environment	 */
 	
-	/**Be sure these bucket exists and doesn't contain anything you care about. WARNING, they will be emptied!*/
+	/**Be sure these bucket exists, are in the same region, and don't contain anything you care about. WARNING, they will be emptied!*/
 	private static final String sourceBucketName = "hcibioinfo-nix-test";
 	private static final String destinationBucketName = "hcibioinfo-gsync-test"; 
+	private static final String profile = "default";
 
 	/**Full path to a small test file.*/
 	private static final String pathToSmallTestFile = "/Users/u0028003/Code/AwsApps/TestData/GSync/Bam/testShortIndex.bam.S3.txt";
@@ -53,9 +55,11 @@ public class TestS3Copy {
 	public void bucketToBucketNoRecursive() {
 		AmazonS3 s3 = null;
 		try {
-			//make a client
-			String region = Util.getRegionFromCredentials();
-			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+			//parse the credentials
+			ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+			//make a client using the source
+			String regionSource = Util.fetchBucketRegion(credentials, sourceBucketName);
+			s3 = AmazonS3ClientBuilder.standard().withRegion(regionSource).build();
 			
 			//empty the buckets
 			emptyS3Bucket(s3, sourceBucketName);
@@ -144,9 +148,13 @@ public class TestS3Copy {
 	public void bucketToBucketRecursive() {
 		AmazonS3 s3 = null;
 		try {
+			//parse the credentials
+			ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+			//make a client using the source
+			String regionSource = Util.fetchBucketRegion(credentials, sourceBucketName);
+			
 			//make a client
-			String region = Util.getRegionFromCredentials();
-			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+			s3 = AmazonS3ClientBuilder.standard().withRegion(regionSource).build();
 			
 			//empty the buckets
 			emptyS3Bucket(s3, sourceBucketName);
@@ -183,9 +191,13 @@ public class TestS3Copy {
 	public void bucketToLocal() {
 		AmazonS3 s3 = null;
 		try {
+			//parse the credentials
+			ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+			//make a client using the source
+			String regionSource = Util.fetchBucketRegion(credentials, sourceBucketName);
+			
 			//make a client
-			String region = Util.getRegionFromCredentials();
-			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+			s3 = AmazonS3ClientBuilder.standard().withRegion(regionSource).build();
 			
 			//empty the buckets
 			emptyS3Bucket(s3, sourceBucketName);
@@ -230,9 +242,13 @@ public class TestS3Copy {
 	public void archiveRetrieval() {
 		AmazonS3 s3 = null;
 		try {
+			//parse the credentials
+			ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
+			//make a client using the source
+			String regionSource = Util.fetchBucketRegion(credentials, sourceBucketName);
+			
 			//make a client
-			String region = Util.getRegionFromCredentials();
-			s3 = AmazonS3ClientBuilder.standard().withRegion(region).build();
+			s3 = AmazonS3ClientBuilder.standard().withRegion(regionSource).build();
 			
 			//empty the buckets
 			emptyS3Bucket(s3, sourceBucketName);
