@@ -2,24 +2,24 @@
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app. 
 
 <pre>
-u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/S3Copy_0.3.jar 
+u0028003$ java -jar ~/Code/AwsApps/target/S3Copy_0.5.jar 
+
 **************************************************************************************
-**                                   S3 Copy : Feb 2024                             **
+**                                  S3 Copy : May 2024                              **
 **************************************************************************************
 SC copies AWS S3 objects, unarchiving them as needed, within the same or different
 accounts or downloads them to your local computer. Run this as a daemon with -l or run
 repeatedly until complete. To upload files to S3, use the AWS CLI. 
 
 To use the app:
-Create a ~/.aws/credentials file with your access, secret, and region info, chmod
+Create a ~/.aws/credentials file with your access and secret info, chmod
   600 the file and keep it private. Use a txt editor or the AWS CLI configure
   command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:
       [default]
       aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A
       aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ
-      region = us-west-2
 Repeat these entries for multiple accounts replacing the word 'default' with a single
-unique account name.
+unique account name. Temporary credentials with a session attribute also work.
 
 Required:
 -j Provide a comma delimited string of copy jobs or a txt file with one per line.
@@ -49,9 +49,10 @@ Example: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -
 </pre>
 
 <pre>
-u0028003$ java -jar -Xmx1G ~/Code/AwsApps/target/VersionManager_0.2.jar 
+ u0028003$ java -jar ~/Code/AwsApps/target/VersionManager_0.4.jar 
+
 **************************************************************************************
-**                             AWS S3 Version Manager :  August 2023                **
+**                             AWS S3 Version Manager :  May 2024                   **
 **************************************************************************************
 Bucket versioning in S3 protects objects from being deleted or overwritten by hiding
 the original when 'deleting' or over writing an existing object. Use this tool to 
@@ -66,8 +67,9 @@ app is provided with no guarantee of proper function.
 
 To use the app:
 1) Enable S3 Object versioning on your bucket.
-2) Install and configure the aws cli with your region, access and secret keys. See
-   https://aws.amazon.com/cli
+2) Install and configure the aws cli with your region, access and secret keys.
+   Temporary credentials with a session attribute also work. See 
+   https://aws.amazon.com/cli. 
 3) Use cli commands like 'aws s3 rm s3://myBucket/myObj.txt' or the AWS web Console to
    'delete' particular objects. Then run this app to actually delete them.
 
@@ -86,7 +88,7 @@ Optional Parameters:
 Example: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test 
      -s .cram,.bam,.gz,.zip -a 7 -c MiloLab
 
-**************************************************************************************   
+************************************************************************************** 
 </pre>
 
 See [Misc/WorkingWithTheAWSJobRunner.pdf](https://github.com/HuntsmanCancerInstitute/AwsApps/blob/master/Misc/WorkingWithTheAWSJobRunner.pdf) for details.
