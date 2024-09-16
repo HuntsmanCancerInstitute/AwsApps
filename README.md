@@ -2,10 +2,10 @@
 Genomic data focused toolkit for working with AWS services (e.g. S3 and EC2). Includes exhaustive JUnit testing for each app. 
 
 <pre>
-u0028003$ java -jar ~/Code/AwsApps/target/S3Copy_0.5.jar 
+u0028003$ java -jar ~/Code/AwsApps/target/S3Copy_0.6.jar 
 
 **************************************************************************************
-**                                  S3 Copy : May 2024                              **
+**                                 S3 Copy : Sept 2024                              **
 **************************************************************************************
 SC copies AWS S3 objects, unarchiving them as needed, within the same or different
 accounts or downloads them to your local computer. Run this as a daemon with -l or run
@@ -30,8 +30,10 @@ Required:
       S3 destination for a recursive copy or when the local folder doesn't exist.
 
 Optional/ Defaults:
--d Perform a dry run to list the actions that would be taken
--r Perform a recursive copy, defaults to an exact source key match
+-u Perform a real run, defaults to listing the actions that would be taken.
+-r Perform a recursive unarchive and copy, defaults to an exact source key match.
+      WARNING: this will unarchive all files in the path and restore them to acive S3.
+      This can be costly! Use with care.
 -e Email addresse(s) to send status messages, comma delimited, no spaces. Note, 
       the sendmail app must be configured on your system. Test it:
       echo 'Subject: Hello' | sendmail yourEmailAddress@yourProvider.com
@@ -43,16 +45,16 @@ Optional/ Defaults:
 -n Number of days to keep restored files in S3, defaults to 1
 -a Print instructions for copying files between different accounts
 
-Example: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l
+Example: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -l
    -j 's3://source/Logs.zip>s3://destination/,s3://source/normal > ~/Downloads/' -r
 **************************************************************************************
 </pre>
 
 <pre>
- u0028003$ java -jar ~/Code/AwsApps/target/VersionManager_0.4.jar 
+u0028003$ java -jar ~/Code/AwsApps/target/VersionManager_0.5.jar 
 
 **************************************************************************************
-**                             AWS S3 Version Manager :  May 2024                   **
+**                             AWS S3 Version Manager : Sept 2024                   **
 **************************************************************************************
 Bucket versioning in S3 protects objects from being deleted or overwritten by hiding
 the original when 'deleting' or over writing an existing object. Use this tool to 
@@ -88,7 +90,7 @@ Optional Parameters:
 Example: java -Xmx10G -jar pathTo/VersionManager_X.X.jar -b mybucket-vm-test 
      -s .cram,.bam,.gz,.zip -a 7 -c MiloLab
 
-************************************************************************************** 
+**************************************************************************************
 </pre>
 
 See [Misc/WorkingWithTheAWSJobRunner.pdf](https://github.com/HuntsmanCancerInstitute/AwsApps/blob/master/Misc/WorkingWithTheAWSJobRunner.pdf) for details.
