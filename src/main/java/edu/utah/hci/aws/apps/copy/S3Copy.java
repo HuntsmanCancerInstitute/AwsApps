@@ -45,7 +45,7 @@ public class S3Copy {
 	private String jobString = null;
 	private String profile = "default";
 	private int numberDaysToRestore = 1;
-	private boolean dryRun = false;
+	private boolean dryRun = true;
 	private String email = null;
 	private int maxThreads = 8;
 	private boolean recursiveCopy = false;
@@ -403,7 +403,7 @@ public class S3Copy {
 						case 'j': jobString = args[++i]; break;
 						case 'e': email = args[++i]; break;
 						case 'n': numberDaysToRestore = Integer.parseInt(args[++i]); break;
-						case 'd': dryRun = true; break;
+						case 'u': dryRun = false; break;
 						case 'r': recursiveCopy = true; break;
 						case 'x': restoreTier = Tier.Expedited; numMinToSleep = 1; break;
 						case 'l': rerunUntilComplete = true; break;
@@ -420,6 +420,10 @@ public class S3Copy {
 					}
 				}
 			}
+			
+			//version
+			String javaVersion = System.getProperty("java.version");
+			if (javaVersion.startsWith("1.8")) Util.printErrAndExit("\nThis app requires java version >= 11.0\n");
 			
 			//set number of threads
 			int availThreads = Runtime.getRuntime().availableProcessors()-1;
@@ -465,7 +469,7 @@ public class S3Copy {
 	private void printOptions() {
 		pl("Options:");
 		pl("  -j Copy job input                : "+ jobString);
-		pl("  -d Dry run                       : "+ dryRun);
+		pl("  -u Dry run                       : "+ dryRun);
 		pl("  -e Email                         : "+ email);
 		pl("  -l Rerun until complete          : "+ rerunUntilComplete);
 		pl("  -r Recursive copy                : "+ recursiveCopy);
@@ -527,22 +531,21 @@ public class S3Copy {
 	public void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                                  S3 Copy : May 2024                              **\n" +
+				"**                                 S3 Copy : Sept 2024                              **\n" +
 				"**************************************************************************************\n" +
 				"SC copies AWS S3 objects, unarchiving them as needed, within the same or different\n"+
 				"accounts or downloads them to your local computer. Run this as a daemon with -l or run\n"+
 				"repeatedly until complete. To upload files to S3, use the AWS CLI. \n"+
 
 				"\nTo use the app:\n"+ 
-				"Create a ~/.aws/credentials file with your access, secret, and region info, chmod\n"+
+				"Create a ~/.aws/credentials file with your access and secret info, chmod\n"+
 				"  600 the file and keep it private. Use a txt editor or the AWS CLI configure\n"+
 				"  command, see https://aws.amazon.com/cli   Example ~/.aws/credentials file:\n"+
 				"      [default]\n"+
 				"      aws_access_key_id = AKIARHBDRGYUIBR33RCJK6A\n"+
 				"      aws_secret_access_key = BgDV2UHZv/T5ENs395867ueESMPGV65HZMpUQ\n"+
-				"      region = us-west-2\n"+
 				"Repeat these entries for multiple accounts replacing the word 'default' with a single\n"+
-				"unique account name.\n"+
+				"unique account name. Temporary credentials with a session attribute also work.\n"+
 
 				"\nRequired:\n"+
 				"-j Provide a comma delimited string of copy jobs or a txt file with one per line.\n"+
@@ -553,8 +556,10 @@ public class S3Copy {
 				"      S3 destination for a recursive copy or when the local folder doesn't exist.\n"+
 
 				"\nOptional/ Defaults:\n" +
-				"-d Perform a dry run to list the actions that would be taken\n"+
-				"-r Perform a recursive copy, defaults to an exact source key match\n"+
+				"-u Perform a real run, defaults to listing the actions that would be taken.\n"+
+				"-r Perform a recursive unarchive and copy, defaults to an exact source key match.\n"+
+				"      WARNING: this will unarchive all files in the path and restore them to acive S3.\n"+
+				"      This can be costly! Use with care.\n"+
 				"-e Email addresse(s) to send status messages, comma delimited, no spaces. Note, \n"+
 				"      the sendmail app must be configured on your system. Test it:\n"+
 				"      echo 'Subject: Hello' | sendmail yourEmailAddress@yourProvider.com\n"+
@@ -566,7 +571,7 @@ public class S3Copy {
 				"-n Number of days to keep restored files in S3, defaults to 1\n"+
 				"-a Print instructions for copying files between different accounts\n"+
 
-				"\nExample: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -d -l\n"+
+				"\nExample: java -Xmx10G -jar pathTo/S3Copy_x.x.jar -e obama@real.gov -p obama -l\n"+
 				"   -j 's3://source/Logs.zip>s3://destination/,s3://source/normal > ~/Downloads/' -r\n"+ 
 
 				"**************************************************************************************\n");

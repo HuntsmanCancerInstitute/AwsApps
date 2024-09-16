@@ -258,20 +258,21 @@ public class Util {
 
 	/**Ridiculous loop to find a bucket's region. WTH AWS!
 	 * @return null if it can't determine the region. */
-	public static String fetchBucketRegion(String profile, String bucketName) throws Exception{
-		
+	public static String fetchBucketRegion(String profile, String bucketName) throws Exception {
+
 		ProfileCredentialsProvider credentials = new ProfileCredentialsProvider(profile);
 		String bucketRegion = null;
 		AmazonS3 s3Client = null;
 		
 		for (String abr: awsBucketRegions) {
-			s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(abr).build();
-			
 			try {
+				s3Client = AmazonS3ClientBuilder.standard().withCredentials(credentials).withRegion(abr).build();
+				
 				//use a head request to attempt to find the region for the given bucket, this typically fails
 				HeadBucketRequest request = new HeadBucketRequest(bucketName);
 				HeadBucketResult  res = s3Client.headBucket(request);
 				bucketRegion  = res.getBucketRegion();
+				
 			} catch (Exception e) {
 				//attempt to parse the actual bucket region from the error message, ugg!
 				//'The bucket is in this region: us-east-2. Please use this region...'

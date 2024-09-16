@@ -71,10 +71,10 @@ public class TestS3Copy {
 			
 			String sourceS3Uri = "s3://"+sourceBucketName+ "/S3Copy/test.txt";
 			
-			//dry run
+			//dry run, default
 			String[] args = new String[] {
 					"-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/S3CopyDest/test.txt",
-					"-d", "-e", email, "-s"
+					"-e", email, "-s"
 			};
 			S3Copy s3Copy = new S3Copy(args);
 			String[] lines = Util.loadTxtFile(s3Copy.getTmpEmailLog());
@@ -83,9 +83,7 @@ public class TestS3Copy {
 			assertTrue("Checking dry run", found);
 			
 			//copy file to file, not recursive
-			args = new String[] {
-					"-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/S3CopyDest/test.txt", "-s"
-			};
+			args = new String[] { "-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/S3CopyDest/test.txt", "-s", "-u"};
 			s3Copy = new S3Copy(args);
 			HashMap<String, S3ObjectSummary> keySum = fetchS3Objects(s3, destinationBucketName);
 			//should be just one
@@ -97,7 +95,7 @@ public class TestS3Copy {
 			//copy file to file, not recursive
 			args = new String[] {
 					"-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/S3CopyDest/test.txt",
-					"-e", email, "-s"
+					"-e", email, "-s", "-u"
 			};
 			s3Copy = new S3Copy(args);
 			lines = Util.loadTxtFile(s3Copy.getTmpEmailLog());
@@ -110,7 +108,7 @@ public class TestS3Copy {
 			String sourceS3UriLog = "s3://"+sourceBucketName+ "/S3Copy/test.log";
 			args = new String[] {
 					"-j", sourceS3Uri+   " > s3://"+destinationBucketName+"/S3CopyDest/test.txt, "+
-						  sourceS3UriLog+" > s3://"+destinationBucketName+"/S3CopyDest/test.log", "-s"
+						  sourceS3UriLog+" > s3://"+destinationBucketName+"/S3CopyDest/test.log", "-s", "-u"
 			};
 			s3Copy = new S3Copy(args);
 			keySum = fetchS3Objects(s3, destinationBucketName);
@@ -125,7 +123,7 @@ public class TestS3Copy {
 			emptyS3Bucket(s3, destinationBucketName);
 			//named file copy to bucket
 			args = new String[] {
-					"-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/",
+					"-j", sourceS3Uri+ " > s3://"+destinationBucketName+"/", "-u"
 			};
 			
 			s3Copy = new S3Copy(args);
@@ -168,7 +166,7 @@ public class TestS3Copy {
 			//recursive copy
 			String[] args = new String[] {
 					"-j", "s3://"+sourceBucketName+ "/S3Copy/test > s3://"+destinationBucketName+"/Test/",
-					"-r", "-s"
+					"-r", "-s", "-u"
 			};
 			S3Copy s3Copy = new S3Copy(args);
 			HashMap<String, S3ObjectSummary> keySum = fetchS3Objects(s3, destinationBucketName);
@@ -218,7 +216,7 @@ public class TestS3Copy {
 			//recursive copy
 			String[] args = new String[] {
 					"-j", "s3://"+sourceBucketName+ "/S3Copy/test > "+workingTmp,
-					"-r", "-s"
+					"-r", "-s", "-u"
 			};
 			S3Copy s3Copy = new S3Copy(args);
 			String[] fileNames = workingTmp.list();
@@ -260,7 +258,7 @@ public class TestS3Copy {
 			//recursive copy, expedited retrieval
 			String[] args = new String[] {
 					"-j", "s3://"+sourceBucketName+ "/S3Copy/test > s3://"+destinationBucketName+"/Test/",
-					"-r", "-x", "-s"
+					"-r", "-x", "-s", "-u"
 
 			};
 			S3Copy s3Copy = new S3Copy(args);

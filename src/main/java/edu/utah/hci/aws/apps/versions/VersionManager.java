@@ -213,6 +213,10 @@ public class VersionManager {
 				}
 			}
 		}
+		
+		//version
+		String javaVersion = System.getProperty("java.version");
+		if (javaVersion.startsWith("1.8")) Util.printErrAndExit("\nThis app requires java version >= 11.0\n");
 
 		//check bucket
 		if (bucketName == null) {
@@ -257,7 +261,7 @@ public class VersionManager {
 	public static void printDocs(){
 		pl("\n" +
 				"**************************************************************************************\n" +
-				"**                             AWS S3 Version Manager :  April 2024                 **\n" +
+				"**                             AWS S3 Version Manager : Sept 2024                   **\n" +
 				"**************************************************************************************\n" +
 				"Bucket versioning in S3 protects objects from being deleted or overwritten by hiding\n"+
 				"the original when 'deleting' or over writing an existing object. Use this tool to \n"+
@@ -272,8 +276,9 @@ public class VersionManager {
 
 				"\nTo use the app:\n"+ 
 				"1) Enable S3 Object versioning on your bucket.\n"+
-				"2) Install and configure the aws cli with your region, access and secret keys. See\n"+
-				"   https://aws.amazon.com/cli\n"+
+				"2) Install and configure the aws cli with your region, access and secret keys.\n"+
+				"   Temporary credentials with a session attribute also work. See \n"+
+				"   https://aws.amazon.com/cli. \n"+
 				"3) Use cli commands like 'aws s3 rm s3://myBucket/myObj.txt' or the AWS web Console to\n"+
 				"   'delete' particular objects. Then run this app to actually delete them.\n"+
 
